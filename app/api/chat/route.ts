@@ -18,6 +18,7 @@ const MAX_SELECTED_FILES = 8;
 const MAX_FILE_CHARS = 18000;
 const MAX_TOTAL_FILE_CHARS = 65000;
 const MAX_FILE_INDEX_ITEMS = 700;
+const HARD_INPUT_TOKEN_LIMIT = 30000;
 
 type ProjectFile = {
   path: string;
@@ -54,6 +55,10 @@ function getRequestedModel(model?: string) {
   }
 
   return DEFAULT_MODEL;
+}
+
+function estimateTokens(text: string) {
+  return Math.ceil(text.length / 3.5);
 }
 
 function truncateMiddle(text: string, maxChars: number) {
@@ -134,6 +139,29 @@ async function pickRelevantFiles(model: string, files: ProjectFile[], message: s
       lines: estimateLines(file.content)
     }));
 
+  const pickerInput = `
+USER REQUEST:
+${message}
+
+ACTIVE FILE:
+${activePath || "none"}
+
+SELECTED FOLDER:
+${selectedFolder || "/"}
+
+LOCAL CANDIDATES:
+${JSON.stringify(localCandidates, null, 2)}
+
+PROJECT FILE INDEX:
+${JSON.stringify(fileIndex, null, 2)}
+`;
+
+  const pickerTokens = estimateTokens(pickerInput);
+
+  if (pickerTokens > HARD_INPUT_TOKEN_LIMIT) {
+    return localCandidates.slice(0, 3);
+  }
+
   const response = await client.responses.create({
     model,
     instructions: `
@@ -153,22 +181,7 @@ Rules:
 - Include related config files only if needed.
 - Do not invent paths.
 `,
-    input: `
-USER REQUEST:
-${message}
-
-ACTIVE FILE:
-${activePath || "none"}
-
-SELECTED FOLDER:
-${selectedFolder || "/"}
-
-LOCAL CANDIDATES:
-${JSON.stringify(localCandidates, null, 2)}
-
-PROJECT FILE INDEX:
-${JSON.stringify(fileIndex, null, 2)}
-`
+    input: pickerInput
   });
 
   try {
@@ -244,6 +257,45 @@ export async function POST(req: NextRequest) {
       .map((file) => file.path)
       .join("\n");
 
+    const finalInput = `
+MODEL USED:
+${model}
+
+USER REQUEST:
+${body.message}
+
+ACTIVE FILE:
+${body.activePath || "none"}
+
+SELECTED FOLDER:
+${body.selectedFolder || "/"}
+
+FILES SELECTED FOR THIS REQUEST:
+${selectedPaths.join("\n") || "none"}
+
+PROJECT TREE ONLY:
+${projectTree}
+
+SELECTED FILE CONTENT:
+${selectedFileContext || "No selected file contents. This may be a create-only or answer-only request."}
+`;
+
+    const finalInputTokens = estimateTokens(finalInput);
+
+    if (finalInputTokens > HARD_INPUT_TOKEN_LIMIT) {
+      return NextResponse.json(
+        {
+          type: "answer",
+          error: `Aborted before calling OpenAI. Estimated input is ${finalInputTokens.toLocaleString()} tokens, above the ${HARD_INPUT_TOKEN_LIMIT.toLocaleString()} token safety limit.`,
+          message: `Aborted to protect your credits. Estimated input: ${finalInputTokens.toLocaleString()} tokens. Limit: ${HARD_INPUT_TOKEN_LIMIT.toLocaleString()} tokens. Open/select a smaller file, ask about a specific file, or reduce imported files.`,
+          usedFiles: selectedPaths,
+          estimatedTokens: finalInputTokens,
+          tokenLimit: HARD_INPUT_TOKEN_LIMIT
+        },
+        { status: 413 }
+      );
+    }
+
     const response = await client.responses.create({
       model,
       instructions: `
@@ -289,28 +341,7 @@ Rules:
 - Never return partial diffs.
 - Never wrap JSON in markdown.
 `,
-      input: `
-MODEL USED:
-${model}
-
-USER REQUEST:
-${body.message}
-
-ACTIVE FILE:
-${body.activePath || "none"}
-
-SELECTED FOLDER:
-${body.selectedFolder || "/"}
-
-FILES SELECTED FOR THIS REQUEST:
-${selectedPaths.join("\n") || "none"}
-
-PROJECT TREE ONLY:
-${projectTree}
-
-SELECTED FILE CONTENT:
-${selectedFileContext || "No selected file contents. This may be a create-only or answer-only request."}
-`
+      input: finalInput
     });
 
     let parsed;
@@ -326,7 +357,9 @@ ${selectedFileContext || "No selected file contents. This may be a create-only o
 
     return NextResponse.json({
       ...parsed,
-      usedFiles: selectedPaths
+      usedFiles: selectedPaths,
+      estimatedTokens: finalInputTokens,
+      tokenLimit: HARD_INPUT_TOKEN_LIMIT
     });
   } catch (error) {
     console.error(error);
