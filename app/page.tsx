@@ -793,7 +793,7 @@ export default function Home() {
         {toast && <div className="toast">{toast}</div>}
 
         <div className="startCard">
-          <div className="brand">Home Codex</div>
+          <div className="brand">Project 2</div>
           <h1>Create a project</h1>
           <p>Import files or ZIPs, edit code, ask questions, and let AI create or update files.</p>
 
