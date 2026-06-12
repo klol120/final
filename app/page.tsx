@@ -618,6 +618,8 @@ export default function Home() {
           password,
           model: getActiveModel(),
           message: userMessage,
+          activePath,
+          selectedFolder,
           files
         })
       });
