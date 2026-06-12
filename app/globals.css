@@ -399,6 +399,38 @@ button {
   flex-shrink: 0;
 }
 
+.modelBox {
+  background: #191d25;
+  border: 1px solid #292f3b;
+  border-radius: 12px;
+  padding: 10px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.modelBox label {
+  display: block;
+  color: #8a93a5;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 7px;
+}
+
+.modelBox select,
+.modelBox input {
+  width: 100%;
+  border: 1px solid #303746;
+  background: #101216;
+  color: white;
+  border-radius: 9px;
+  padding: 9px;
+  outline: none;
+}
+
+.modelBox input {
+  margin-top: 8px;
+}
+
 .chatBox {
   flex: 1;
   min-height: 0;

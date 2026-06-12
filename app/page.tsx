@@ -32,6 +32,17 @@ type TreeNode = {
   children: TreeNode[];
 };
 
+const MODEL_OPTIONS = [
+  { value: "gpt-4.1-mini", label: "GPT-4.1 mini — cheap / reliable" },
+  { value: "gpt-4.1", label: "GPT-4.1 — stronger coding" },
+  { value: "gpt-4o-mini", label: "GPT-4o mini — cheap fallback" },
+  { value: "gpt-5.4-mini", label: "GPT-5.4 mini — best coding value" },
+  { value: "gpt-5.4", label: "GPT-5.4 — stronger / more expensive" },
+  { value: "gpt-5.5", label: "GPT-5.5 — newest / most expensive" },
+  { value: "custom", label: "Custom model ID" }
+];
+
+
 function cleanPath(path: string) {
   return path.replaceAll("\\", "/").replace(/^\/+/, "").replace(/\/+/g, "/");
 }
@@ -286,6 +297,8 @@ export default function Home() {
   const [newItemName, setNewItemName] = useState("");
   const [message, setMessage] = useState("");
   const [password, setPassword] = useState("");
+  const [selectedModel, setSelectedModel] = useState("gpt-5.4-mini");
+  const [customModel, setCustomModel] = useState("");
   const [chat, setChat] = useState<{ role: "user" | "ai" | "system"; text: string }[]>([]);
   const [pendingChanges, setPendingChanges] = useState<AiChange[]>([]);
   const [previewChangeIndex, setPreviewChangeIndex] = useState<number | null>(null);
@@ -320,6 +333,8 @@ export default function Home() {
     setFiles(data.files || []);
     setActivePath(data.activePath || "");
     setSelectedFolder(data.selectedFolder || "");
+    setSelectedModel(data.selectedModel || "gpt-5.4-mini");
+    setCustomModel(data.customModel || "");
   }, []);
 
   useEffect(() => {
@@ -330,10 +345,12 @@ export default function Home() {
         projectCreated,
         files,
         activePath,
-        selectedFolder
+        selectedFolder,
+        selectedModel,
+        customModel
       })
     );
-  }, [projectName, projectCreated, files, activePath, selectedFolder]);
+  }, [projectName, projectCreated, files, activePath, selectedFolder, selectedModel, customModel]);
 
   useEffect(() => {
     if (!toast) return;
@@ -569,6 +586,14 @@ export default function Home() {
     setToast("Project exported");
   }
 
+  function getActiveModel() {
+    if (selectedModel === "custom") {
+      return customModel.trim() || "gpt-5.4-mini";
+    }
+
+    return selectedModel;
+  }
+
   async function askAi() {
     if (!message.trim()) return;
 
@@ -580,7 +605,7 @@ export default function Home() {
     setChat((current) => [
       ...current,
       { role: "user", text: userMessage },
-      { role: "system", text: "Model is thinking..." }
+      { role: "system", text: `${getActiveModel()} is thinking...` }
     ]);
 
     try {
@@ -591,6 +616,7 @@ export default function Home() {
         },
         body: JSON.stringify({
           password,
+          model: getActiveModel(),
           message: userMessage,
           files
         })
@@ -598,7 +624,7 @@ export default function Home() {
 
       const data = await safeJson(res);
 
-      setChat((current) => current.filter((item) => item.text !== "Model is thinking..."));
+      setChat((current) => current.filter((item) => !item.text.endsWith(" is thinking...")));
 
       if (!res.ok) {
         setChat((current) => [
@@ -624,7 +650,7 @@ export default function Home() {
         setToast("AI answered");
       }
     } catch {
-      setChat((current) => current.filter((item) => item.text !== "Model is thinking..."));
+      setChat((current) => current.filter((item) => !item.text.endsWith(" is thinking...")));
       setChat((current) => [...current, { role: "ai", text: "Connection failed." }]);
       setToast("Connection failed");
     } finally {
@@ -793,7 +819,7 @@ export default function Home() {
         {toast && <div className="toast">{toast}</div>}
 
         <div className="startCard">
-          <div className="brand">Project 2</div>
+          <div className="brand">Home Codex</div>
           <h1>Create a project</h1>
           <p>Import files or ZIPs, edit code, ask questions, and let AI create or update files.</p>
 
@@ -961,6 +987,29 @@ export default function Home() {
           placeholder="App password"
           type="password"
         />
+
+        <div className="modelBox">
+          <label>Model</label>
+
+          <select
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+          >
+            {MODEL_OPTIONS.map((model) => (
+              <option key={model.value} value={model.value}>
+                {model.label}
+              </option>
+            ))}
+          </select>
+
+          {selectedModel === "custom" && (
+            <input
+              value={customModel}
+              onChange={(e) => setCustomModel(e.target.value)}
+              placeholder="example: gpt-5.4-mini"
+            />
+          )}
+        </div>
 
         <div className="chatBox">
           {chat.map((item, index) => (

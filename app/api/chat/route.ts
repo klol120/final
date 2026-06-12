@@ -5,6 +5,15 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+const ALLOWED_MODELS = new Set([
+  "gpt-4.1-mini",
+  "gpt-4.1",
+  "gpt-4o-mini",
+  "gpt-5.4-mini",
+  "gpt-5.4",
+  "gpt-5.5"
+]);
+
 type ProjectFile = {
   path: string;
   content: string;
@@ -12,9 +21,24 @@ type ProjectFile = {
 
 type RequestBody = {
   password: string;
+  model?: string;
   message: string;
   files: ProjectFile[];
 };
+
+function getRequestedModel(model?: string) {
+  const requested = model?.trim() || "gpt-5.4-mini";
+
+  if (ALLOWED_MODELS.has(requested)) {
+    return requested;
+  }
+
+  if (/^gpt-[a-zA-Z0-9.\-_]+$/.test(requested)) {
+    return requested;
+  }
+
+  return "gpt-5.4-mini";
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -24,12 +48,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const model = getRequestedModel(body.model);
+
     const fileContext = body.files
       .map((file) => `FILE: ${file.path}\n\`\`\`\n${file.content}\n\`\`\``)
       .join("\n\n");
 
     const response = await client.responses.create({
-      model: "gpt-5.4-mini",
+      model,
       instructions: `
 You are a coding agent inside a web IDE.
 
@@ -74,6 +100,10 @@ Rules:
 - Keep the message practical and short.
 `,
       input: `
+MODEL USED:
+
+${model}
+
 PROJECT FILES:
 
 ${fileContext || "No files yet."}
@@ -102,7 +132,7 @@ ${body.message}
     return NextResponse.json(
       {
         error:
-          "Server error"
+          "Server error. Check your selected model, API key, and Vercel logs. If you are running localhost on public Wi-Fi, deploy to Vercel/Render so the API call happens from that server."
       },
       { status: 500 }
     );
