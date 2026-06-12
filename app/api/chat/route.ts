@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
       .join("\n\n");
 
     const response = await client.responses.create({
-      model: "gpt-4.1-mini",
+      model: "gpt-5.4-mini",
       instructions: `
 You are a coding agent inside a web IDE.
 
@@ -102,7 +102,7 @@ ${body.message}
     return NextResponse.json(
       {
         error:
-          "Server error. If you are on public Wi-Fi and running localhost, the OpenAI request may be blocked. Deploy to Vercel/Render so the API call happens from that server."
+          "Server error"
       },
       { status: 500 }
     );
