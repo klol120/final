@@ -2,6 +2,7 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
   background: #101216;
@@ -322,6 +323,12 @@ button {
   min-width: 0;
 }
 
+.previewHeader {
+  background: #211f16;
+  border-bottom-color: #6b5528;
+  color: #f5d891;
+}
+
 .editorHeader span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -436,12 +443,31 @@ button {
   border-radius: 12px;
   margin: 12px 0;
   flex-shrink: 0;
-  max-height: 170px;
+  max-height: 220px;
   overflow: auto;
 }
 
-.changeItem {
+.changesHeader {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.changesHeader button,
+.previewButton {
+  border: 1px solid #3a425c;
+  background: #222733;
+  color: #dce3f2;
+  border-radius: 7px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.changeItem {
+  display: grid;
+  grid-template-columns: 55px 1fr auto;
+  align-items: center;
   gap: 8px;
   margin-top: 8px;
   font-size: 13px;
@@ -458,7 +484,7 @@ button {
   word-break: break-all;
 }
 
-.changesBox button {
+.applyButton {
   width: 100%;
   margin-top: 12px;
   padding: 10px;
@@ -547,62 +573,4 @@ button {
     min-width: 900px;
     grid-template-columns: 230px minmax(0, 1fr) 310px;
   }
-}
-
-.previewHeader {
-  background: #171b24;
-}
-
-.closePreviewButton {
-  margin-left: auto;
-  border: 1px solid #343c4e;
-  background: #222733;
-  color: #e6eaf2;
-  padding: 6px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.previewNotice {
-  flex: 0 0 auto;
-  background: #202633;
-  border-bottom: 1px solid #343c4e;
-  color: #cdd3df;
-  padding: 9px 14px;
-  font-size: 13px;
-}
-
-.previewDelete h2 {
-  color: #ffb4b4;
-}
-
-.previewChangeButton {
-  margin-left: auto;
-  border: 1px solid #343c4e;
-  background: #222733;
-  color: #e6eaf2;
-  padding: 4px 8px;
-  border-radius: 7px;
-  cursor: pointer;
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.previewChangeButton:hover,
-.closePreviewButton:hover {
-  background: #2a3040;
-}
-
-.changeButtons {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.changeButtons button:nth-child(2) {
-  background: #222733;
-  color: #e6eaf2;
-  border: 1px solid #343c4e;
 }

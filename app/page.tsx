@@ -1,9 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
-import "./globals.css";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -38,6 +38,11 @@ function cleanPath(path: string) {
 
 function fileName(path: string) {
   return cleanPath(path).split("/").filter(Boolean).pop() || path;
+}
+
+function folderName(path: string) {
+  const parts = cleanPath(path).split("/").filter(Boolean);
+  return parts.pop() || "/";
 }
 
 function buildTree(files: ProjectFile[]) {
@@ -95,6 +100,7 @@ function getFileIcon(path: string) {
   if (path.endsWith(".json")) return "{}";
   if (path.endsWith(".md")) return "MD";
   if (path.endsWith(".env")) return "🔐";
+  if (path.endsWith(".zip")) return "ZIP";
   return "📄";
 }
 
@@ -109,6 +115,43 @@ function getLanguage(path: string) {
   return "plaintext";
 }
 
+function isBinaryLike(path: string) {
+  const lower = path.toLowerCase();
+
+  return [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".ico",
+    ".pdf",
+    ".mp4",
+    ".mp3",
+    ".wav",
+    ".ttf",
+    ".otf",
+    ".woff",
+    ".woff2",
+    ".exe",
+    ".dll"
+  ].some((ext) => lower.endsWith(ext));
+}
+
+function shouldIgnoreImportedPath(path: string) {
+  const clean = cleanPath(path);
+  const parts = clean.split("/");
+
+  return (
+    parts.includes("node_modules") ||
+    parts.includes(".next") ||
+    parts.includes(".git") ||
+    parts.includes("dist") ||
+    parts.includes("build") ||
+    clean.endsWith("package-lock.json")
+  );
+}
+
 async function readFileAsText(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -119,10 +162,66 @@ async function readFileAsText(file: File) {
   });
 }
 
+async function importZipFile(file: File, baseFolder = "") {
+  const zip = await JSZip.loadAsync(file);
+  const imported: ProjectFile[] = [];
+  const folderKeeps = new Set<string>();
+
+  for (const [rawPath, entry] of Object.entries(zip.files)) {
+    const path = cleanPath(rawPath);
+
+    if (!path || shouldIgnoreImportedPath(path)) continue;
+
+    const fullPath = baseFolder ? cleanPath(`${baseFolder}/${path}`) : path;
+
+    if (entry.dir) {
+      folderKeeps.add(cleanPath(`${fullPath}/.keep`));
+      continue;
+    }
+
+    const parent = fullPath.split("/").slice(0, -1).join("/");
+    if (parent) folderKeeps.add(cleanPath(`${parent}/.keep`));
+
+    if (isBinaryLike(fullPath)) {
+      imported.push({
+        path: fullPath,
+        content: `[Binary file imported from ZIP: ${fileName(fullPath)}]\nThis editor stores text files only.`
+      });
+      continue;
+    }
+
+    const content = await entry.async("text");
+    imported.push({
+      path: fullPath,
+      content
+    });
+  }
+
+  for (const keepPath of folderKeeps) {
+    const folderHasFile = imported.some((item) => item.path.startsWith(keepPath.replace(/\/\.keep$/, "/")));
+    const keepAlreadyImported = imported.some((item) => item.path === keepPath);
+
+    if (!folderHasFile && !keepAlreadyImported) {
+      imported.push({
+        path: keepPath,
+        content: ""
+      });
+    }
+  }
+
+  return imported;
+}
+
 async function walkEntry(entry: any, basePath = ""): Promise<ProjectFile[]> {
   if (entry.isFile) {
     return new Promise((resolve) => {
       entry.file(async (file: File) => {
+        if (file.name.toLowerCase().endsWith(".zip")) {
+          const files = await importZipFile(file, basePath);
+          resolve(files);
+          return;
+        }
+
         const content = await readFileAsText(file);
         resolve([
           {
@@ -170,7 +269,7 @@ async function safeJson(res: Response): Promise<AiResponse> {
   }
 
   try {
-    return JSON.parse(text);
+    return JSON.parse(text) as AiResponse;
   } catch {
     return {
       error: text.slice(0, 500)
@@ -189,7 +288,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [chat, setChat] = useState<{ role: "user" | "ai" | "system"; text: string }[]>([]);
   const [pendingChanges, setPendingChanges] = useState<AiChange[]>([]);
-  const [previewChange, setPreviewChange] = useState<AiChange | null>(null);
+  const [previewChangeIndex, setPreviewChangeIndex] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [draggingExternal, setDraggingExternal] = useState(false);
   const [draggedPath, setDraggedPath] = useState("");
@@ -202,6 +301,14 @@ export default function Home() {
   const activeFile = useMemo(() => {
     return files.find((file) => file.path === activePath) || null;
   }, [files, activePath]);
+
+  const previewChange = previewChangeIndex === null ? null : pendingChanges[previewChangeIndex] || null;
+  const previewContent =
+    previewChange && previewChange.action !== "delete"
+      ? previewChange.content || ""
+      : activeFile?.content || "";
+
+  const editorPath = previewChange?.path || activeFile?.path || "";
 
   useEffect(() => {
     const saved = localStorage.getItem("home-codex-project");
@@ -231,7 +338,7 @@ export default function Home() {
   useEffect(() => {
     if (!toast) return;
 
-    const timer = window.setTimeout(() => setToast(""), 2400);
+    const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
@@ -267,8 +374,10 @@ export default function Home() {
       return Array.from(map.values()).sort((a, b) => a.path.localeCompare(b.path));
     });
 
-    if (validFiles[0]?.path) {
-      setActivePath(cleanPath(validFiles[0].path));
+    const firstRealFile = validFiles.find((file) => !file.path.endsWith("/.keep"));
+
+    if (firstRealFile?.path) {
+      setActivePath(cleanPath(firstRealFile.path));
     }
   }
 
@@ -300,6 +409,8 @@ export default function Home() {
   }
 
   function updateActiveFile(content: string) {
+    if (previewChange) return;
+
     setFiles((current) =>
       current.map((file) => {
         if (file.path !== activePath) return file;
@@ -309,9 +420,8 @@ export default function Home() {
   }
 
   function deleteFile(path: string) {
-    const confirmed = window.confirm(`Are you sure you want to delete ${path}?`);
-
-    if (!confirmed) return;
+    const ok = window.confirm(`Are you sure you want to delete "${path}"?`);
+    if (!ok) return;
 
     setFiles((current) => current.filter((file) => file.path !== path));
 
@@ -319,11 +429,32 @@ export default function Home() {
       setActivePath("");
     }
 
-    if (previewChange?.path === path) {
-      setPreviewChange(null);
+    setPreviewChangeIndex(null);
+    setToast(`Deleted ${path}`);
+  }
+
+  function deleteFolder(path: string) {
+    const clean = cleanPath(path);
+    const affected = files.filter((file) => file.path === `${clean}/.keep` || file.path.startsWith(`${clean}/`));
+
+    const ok = window.confirm(
+      `Are you sure you want to delete folder "${clean}" and ${affected.length} file/item${affected.length === 1 ? "" : "s"} inside it?`
+    );
+
+    if (!ok) return;
+
+    setFiles((current) => current.filter((file) => !(file.path === `${clean}/.keep` || file.path.startsWith(`${clean}/`))));
+
+    if (activePath.startsWith(`${clean}/`)) {
+      setActivePath("");
     }
 
-    setToast(`Deleted ${path}`);
+    if (selectedFolder === clean || selectedFolder.startsWith(`${clean}/`)) {
+      setSelectedFolder("");
+    }
+
+    setPreviewChangeIndex(null);
+    setToast(`Deleted folder ${clean}`);
   }
 
   function moveFileToFolder(sourcePath: string, targetFolder: string) {
@@ -358,21 +489,31 @@ export default function Home() {
   async function importFilesFromInput(selectedFiles: FileList | null) {
     if (!selectedFiles) return;
 
-    const imported = await Promise.all(
+    const groups = await Promise.all(
       Array.from(selectedFiles).map(async (file) => {
         const relativePath = cleanPath((file as any).webkitRelativePath || file.name);
+
+        if (file.name.toLowerCase().endsWith(".zip")) {
+          return importZipFile(file, selectedFolder);
+        }
+
         const path = selectedFolder ? cleanPath(`${selectedFolder}/${relativePath}`) : relativePath;
         const content = await readFileAsText(file);
 
-        return {
-          path,
-          content
-        };
+        return [
+          {
+            path,
+            content
+          }
+        ];
       })
     );
 
+    const imported = groups.flat();
+
     upsertFiles(imported);
-    setToast(`Imported ${imported.length} file${imported.length === 1 ? "" : "s"}`);
+    setPreviewChangeIndex(null);
+    setToast(`Imported ${imported.length} file/item${imported.length === 1 ? "" : "s"}`);
 
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -395,7 +536,8 @@ export default function Home() {
       const imported = groups.flat();
 
       upsertFiles(imported);
-      setToast(`Imported ${imported.length} file${imported.length === 1 ? "" : "s"}`);
+      setPreviewChangeIndex(null);
+      setToast(`Imported ${imported.length} file/item${imported.length === 1 ? "" : "s"}`);
       return;
     }
 
@@ -411,6 +553,7 @@ export default function Home() {
     const visibleFiles = files.filter((file) => !file.path.endsWith("/.keep"));
 
     for (const file of visibleFiles) {
+      if (file.content.startsWith("[Binary file imported from ZIP:")) continue;
       zip.file(file.path, file.content);
     }
 
@@ -433,6 +576,7 @@ export default function Home() {
 
     setLoading(true);
     setPendingChanges([]);
+    setPreviewChangeIndex(null);
     setChat((current) => [
       ...current,
       { role: "user", text: userMessage },
@@ -473,7 +617,8 @@ export default function Home() {
 
       if (data.type === "edit" && data.changes?.length) {
         setPendingChanges(data.changes);
-        setPreviewChange(data.changes[0]);
+        const firstPreviewIndex = data.changes.findIndex((change) => change.action !== "delete");
+        setPreviewChangeIndex(firstPreviewIndex >= 0 ? firstPreviewIndex : null);
         setToast("AI prepared file changes");
       } else {
         setToast("AI answered");
@@ -542,8 +687,14 @@ export default function Home() {
     }
 
     setPendingChanges([]);
-    setPreviewChange(null);
+    setPreviewChangeIndex(null);
     setToast("Changes applied successfully");
+  }
+
+  function discardChanges() {
+    setPendingChanges([]);
+    setPreviewChangeIndex(null);
+    setToast("Changes discarded");
   }
 
   function renderTree(nodes: TreeNode[], depth = 0) {
@@ -558,7 +709,10 @@ export default function Home() {
                   : "treeItem"
               }
               style={{ paddingLeft: `${12 + depth * 16}px` }}
-              onClick={() => setSelectedFolder(node.path)}
+              onClick={() => {
+                setSelectedFolder(node.path);
+                setPreviewChangeIndex(null);
+              }}
               onDragOver={(e) => {
                 if (!draggedPath) return;
                 e.preventDefault();
@@ -577,6 +731,16 @@ export default function Home() {
               <span className="folderIcon">▸</span>
               <span className="folderEmoji">📁</span>
               <span>{node.name}</span>
+              <span
+                className="deleteIcon"
+                title="Delete folder"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteFolder(node.path);
+                }}
+              >
+                ×
+              </span>
             </button>
 
             {renderTree(node.children, depth + 1)}
@@ -590,11 +754,11 @@ export default function Home() {
         <button
           key={node.path}
           draggable
-          className={activePath === node.path ? "treeItem activeFile" : "treeItem"}
+          className={activePath === node.path && !previewChange ? "treeItem activeFile" : "treeItem"}
           style={{ paddingLeft: `${12 + depth * 16}px` }}
           onClick={() => {
-            setPreviewChange(null);
             setActivePath(node.path);
+            setPreviewChangeIndex(null);
           }}
           onDragStart={(e) => {
             setDraggedPath(node.path);
@@ -610,6 +774,7 @@ export default function Home() {
           <span>{node.name}</span>
           <span
             className="deleteIcon"
+            title="Delete file"
             onClick={(e) => {
               e.stopPropagation();
               deleteFile(node.path);
@@ -630,7 +795,7 @@ export default function Home() {
         <div className="startCard">
           <div className="brand">Home Codex</div>
           <h1>Create a project</h1>
-          <p>Import files, edit code, ask questions, and let AI create or update files.</p>
+          <p>Import files or ZIPs, edit code, ask questions, and let AI create or update files.</p>
 
           <input
             value={projectName}
@@ -665,7 +830,7 @@ export default function Home() {
 
       {draggingExternal && !draggedPath && (
         <div className="dropOverlay">
-          <div>Drop files or folders to import</div>
+          <div>Drop files, folders, or ZIPs to import</div>
         </div>
       )}
 
@@ -678,7 +843,7 @@ export default function Home() {
         </div>
 
         <div className="toolbar">
-          <button onClick={() => fileInputRef.current?.click()}>Import</button>
+          <button onClick={() => fileInputRef.current?.click()}>Import / ZIP</button>
           <button onClick={exportProject}>Export ZIP</button>
         </div>
 
@@ -687,6 +852,7 @@ export default function Home() {
           className="hiddenInput"
           type="file"
           multiple
+          accept=".zip,.txt,.js,.jsx,.ts,.tsx,.py,.html,.css,.json,.md,.env"
           onChange={(e) => importFilesFromInput(e.target.files)}
         />
 
@@ -715,7 +881,10 @@ export default function Home() {
                 ? "treeItem selectedFolder"
                 : "treeItem"
             }
-            onClick={() => setSelectedFolder("")}
+            onClick={() => {
+              setSelectedFolder("");
+              setPreviewChangeIndex(null);
+            }}
             onDragOver={(e) => {
               if (!draggedPath) return;
               e.preventDefault();
@@ -740,60 +909,24 @@ export default function Home() {
       </aside>
 
       <section className="editor">
-        {previewChange ? (
+        {editorPath ? (
           <>
-            <div className="editorHeader previewHeader">
-              <span className="fileIcon large">{getFileIcon(previewChange.path)}</span>
-              <span>Preview: {previewChange.action.toUpperCase()} {previewChange.path}</span>
-              <button className="closePreviewButton" onClick={() => setPreviewChange(null)}>Close Preview</button>
-            </div>
-
-            {previewChange.action === "delete" ? (
-              <div className="emptyEditor previewDelete">
-                <div>
-                  <h2>This file will be deleted</h2>
-                  <p>{previewChange.path}</p>
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="previewNotice">Preview only. Click Apply Changes to write this into your project.</div>
-                <div className="monacoWrap">
-                  <MonacoEditor
-                    height="100%"
-                    theme="vs-dark"
-                    language={getLanguage(previewChange.path)}
-                    value={previewChange.content || ""}
-                    options={{
-                      readOnly: true,
-                      minimap: { enabled: false },
-                      fontSize: 14,
-                      lineNumbers: "on",
-                      wordWrap: "on",
-                      scrollBeyondLastLine: false,
-                      automaticLayout: true,
-                      tabSize: 2
-                    }}
-                  />
-                </div>
-              </>
-            )}
-          </>
-        ) : activeFile ? (
-          <>
-            <div className="editorHeader">
-              <span className="fileIcon large">{getFileIcon(activeFile.path)}</span>
-              <span>{activeFile.path}</span>
+            <div className={previewChange ? "editorHeader previewHeader" : "editorHeader"}>
+              <span className="fileIcon large">{getFileIcon(editorPath)}</span>
+              <span>
+                {previewChange ? `Preview: ${previewChange.action.toUpperCase()} ${editorPath}` : editorPath}
+              </span>
             </div>
 
             <div className="monacoWrap">
               <MonacoEditor
                 height="100%"
                 theme="vs-dark"
-                language={getLanguage(activeFile.path)}
-                value={activeFile.content}
+                language={getLanguage(editorPath)}
+                value={previewContent}
                 onChange={(value) => updateActiveFile(value || "")}
                 options={{
+                  readOnly: Boolean(previewChange),
                   minimap: { enabled: false },
                   fontSize: 14,
                   lineNumbers: "on",
@@ -809,7 +942,7 @@ export default function Home() {
           <div className="emptyEditor">
             <div>
               <h2>No file selected</h2>
-              <p>Choose a file, create one, or drag files into the app.</p>
+              <p>Choose a file, create one, or drag files/ZIPs into the app.</p>
             </div>
           </div>
         )}
@@ -848,20 +981,30 @@ export default function Home() {
 
         {pendingChanges.length > 0 && (
           <div className="changesBox">
-            <strong>Pending changes</strong>
+            <div className="changesHeader">
+              <strong>Pending changes</strong>
+              <button onClick={discardChanges}>Discard</button>
+            </div>
 
             {pendingChanges.map((change, index) => (
               <div key={index} className="changeItem">
                 <span>{change.action}</span>
                 <code>{change.path}</code>
-                <button className="previewChangeButton" onClick={() => setPreviewChange(change)}>Preview</button>
+                {change.action !== "delete" && (
+                  <button
+                    className="previewButton"
+                    onClick={() => {
+                      setPreviewChangeIndex(index);
+                      setActivePath(cleanPath(change.path));
+                    }}
+                  >
+                    Preview
+                  </button>
+                )}
               </div>
             ))}
 
-            <div className="changeButtons">
-              <button onClick={applyChanges}>Apply Changes</button>
-              <button onClick={() => { setPendingChanges([]); setPreviewChange(null); }}>Discard</button>
-            </div>
+            <button className="applyButton" onClick={applyChanges}>Apply Changes</button>
           </div>
         )}
 
