@@ -189,6 +189,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [chat, setChat] = useState<{ role: "user" | "ai" | "system"; text: string }[]>([]);
   const [pendingChanges, setPendingChanges] = useState<AiChange[]>([]);
+  const [previewChange, setPreviewChange] = useState<AiChange | null>(null);
   const [loading, setLoading] = useState(false);
   const [draggingExternal, setDraggingExternal] = useState(false);
   const [draggedPath, setDraggedPath] = useState("");
@@ -308,10 +309,18 @@ export default function Home() {
   }
 
   function deleteFile(path: string) {
+    const confirmed = window.confirm(`Are you sure you want to delete ${path}?`);
+
+    if (!confirmed) return;
+
     setFiles((current) => current.filter((file) => file.path !== path));
 
     if (activePath === path) {
       setActivePath("");
+    }
+
+    if (previewChange?.path === path) {
+      setPreviewChange(null);
     }
 
     setToast(`Deleted ${path}`);
@@ -464,6 +473,7 @@ export default function Home() {
 
       if (data.type === "edit" && data.changes?.length) {
         setPendingChanges(data.changes);
+        setPreviewChange(data.changes[0]);
         setToast("AI prepared file changes");
       } else {
         setToast("AI answered");
@@ -532,6 +542,7 @@ export default function Home() {
     }
 
     setPendingChanges([]);
+    setPreviewChange(null);
     setToast("Changes applied successfully");
   }
 
@@ -581,7 +592,10 @@ export default function Home() {
           draggable
           className={activePath === node.path ? "treeItem activeFile" : "treeItem"}
           style={{ paddingLeft: `${12 + depth * 16}px` }}
-          onClick={() => setActivePath(node.path)}
+          onClick={() => {
+            setPreviewChange(null);
+            setActivePath(node.path);
+          }}
           onDragStart={(e) => {
             setDraggedPath(node.path);
             e.dataTransfer.setData("text/plain", node.path);
@@ -726,7 +740,46 @@ export default function Home() {
       </aside>
 
       <section className="editor">
-        {activeFile ? (
+        {previewChange ? (
+          <>
+            <div className="editorHeader previewHeader">
+              <span className="fileIcon large">{getFileIcon(previewChange.path)}</span>
+              <span>Preview: {previewChange.action.toUpperCase()} {previewChange.path}</span>
+              <button className="closePreviewButton" onClick={() => setPreviewChange(null)}>Close Preview</button>
+            </div>
+
+            {previewChange.action === "delete" ? (
+              <div className="emptyEditor previewDelete">
+                <div>
+                  <h2>This file will be deleted</h2>
+                  <p>{previewChange.path}</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="previewNotice">Preview only. Click Apply Changes to write this into your project.</div>
+                <div className="monacoWrap">
+                  <MonacoEditor
+                    height="100%"
+                    theme="vs-dark"
+                    language={getLanguage(previewChange.path)}
+                    value={previewChange.content || ""}
+                    options={{
+                      readOnly: true,
+                      minimap: { enabled: false },
+                      fontSize: 14,
+                      lineNumbers: "on",
+                      wordWrap: "on",
+                      scrollBeyondLastLine: false,
+                      automaticLayout: true,
+                      tabSize: 2
+                    }}
+                  />
+                </div>
+              </>
+            )}
+          </>
+        ) : activeFile ? (
           <>
             <div className="editorHeader">
               <span className="fileIcon large">{getFileIcon(activeFile.path)}</span>
@@ -801,10 +854,14 @@ export default function Home() {
               <div key={index} className="changeItem">
                 <span>{change.action}</span>
                 <code>{change.path}</code>
+                <button className="previewChangeButton" onClick={() => setPreviewChange(change)}>Preview</button>
               </div>
             ))}
 
-            <button onClick={applyChanges}>Apply Changes</button>
+            <div className="changeButtons">
+              <button onClick={applyChanges}>Apply Changes</button>
+              <button onClick={() => { setPendingChanges([]); setPreviewChange(null); }}>Discard</button>
+            </div>
           </div>
         )}
 
