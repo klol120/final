@@ -1,0 +1,550 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #101216;
+  color: #e6e6e6;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  overflow: hidden;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  user-select: none;
+}
+
+.startScreen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at top, #22283a 0, transparent 380px),
+    #101216;
+}
+
+.startCard {
+  width: 430px;
+  background: #171a21;
+  border: 1px solid #282d38;
+  border-radius: 20px;
+  padding: 30px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+}
+
+.brand {
+  color: #9ba4b5;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 20px;
+}
+
+.startCard h1 {
+  margin: 0;
+  font-size: 30px;
+  letter-spacing: -0.04em;
+}
+
+.startCard p {
+  color: #a3aab8;
+  line-height: 1.5;
+}
+
+.startCard input {
+  width: 100%;
+  margin-top: 18px;
+  padding: 13px 14px;
+  border-radius: 12px;
+  border: 1px solid #303644;
+  background: #101216;
+  color: #f5f5f5;
+  outline: none;
+}
+
+.startCard button {
+  width: 100%;
+  margin-top: 14px;
+  padding: 13px;
+  border: 0;
+  border-radius: 12px;
+  background: #f4f4f5;
+  color: #111318;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.appShell {
+  height: 100vh;
+  min-width: 980px;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) 340px;
+  overflow: hidden;
+  position: relative;
+}
+
+.sidebar {
+  background: #13161c;
+  border-right: 1px solid #252a35;
+  padding: 12px;
+  overflow: auto;
+  min-width: 0;
+}
+
+.sidebarTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.label {
+  color: #798294;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.projectTitle {
+  font-size: 16px;
+  font-weight: 700;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.toolbar button {
+  border: 1px solid #333b4b;
+  background: #222733;
+  color: #e6eaf2;
+  padding: 8px;
+  border-radius: 9px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.toolbar button:hover {
+  background: #2a3040;
+}
+
+.hiddenInput {
+  display: none;
+}
+
+.selectedFolderBox {
+  background: #191d25;
+  border: 1px solid #292f3b;
+  border-radius: 12px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.selectedFolderBox span {
+  display: block;
+  font-size: 11px;
+  color: #7f8899;
+  margin-bottom: 4px;
+}
+
+.selectedFolderBox strong {
+  font-size: 13px;
+  color: #d8dde8;
+  word-break: break-all;
+}
+
+.newItemBox {
+  background: #191d25;
+  border: 1px solid #292f3b;
+  border-radius: 12px;
+  padding: 10px;
+  margin-bottom: 14px;
+}
+
+.newItemBox input {
+  width: 100%;
+  padding: 9px;
+  border: 1px solid #303746;
+  background: #101216;
+  color: white;
+  border-radius: 9px;
+  outline: none;
+}
+
+.newButtons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.newButtons button {
+  border: 1px solid #333b4b;
+  background: #222733;
+  color: #e6eaf2;
+  padding: 8px;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.newButtons button:hover {
+  background: #2a3040;
+}
+
+.treeRoot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.treeItem {
+  width: 100%;
+  min-height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #cdd3df;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+.treeItem span:nth-child(2),
+.treeItem span:nth-child(3) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.treeItem:hover {
+  background: #1d222d;
+}
+
+.treeItem.activeFile {
+  background: #263248;
+  color: #ffffff;
+}
+
+.treeItem.selectedFolder {
+  background: #202633;
+  outline: 1px solid #3a425c;
+}
+
+.folderIcon {
+  color: #677184;
+  font-size: 10px;
+}
+
+.folderEmoji {
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.fileIcon {
+  width: 24px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #aeb7c8;
+  background: #222836;
+  border: 1px solid #333a4c;
+  border-radius: 5px;
+  font-weight: 700;
+}
+
+.fileIcon.large {
+  width: 28px;
+  height: 24px;
+  margin-right: 8px;
+}
+
+.deleteIcon {
+  margin-left: auto;
+  color: #778195;
+  opacity: 0;
+  padding: 0 7px;
+  flex-shrink: 0;
+}
+
+.treeItem:hover .deleteIcon {
+  opacity: 1;
+}
+
+.deleteIcon:hover {
+  color: #ff8a8a;
+}
+
+.editor {
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #0f1115;
+}
+
+.editorHeader {
+  height: 47px;
+  flex: 0 0 47px;
+  border-bottom: 1px solid #252a35;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  color: #c7cedd;
+  font-size: 14px;
+  min-width: 0;
+}
+
+.editorHeader span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monacoWrap {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.emptyEditor {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #7f8899;
+  text-align: center;
+}
+
+.emptyEditor h2 {
+  margin: 0 0 6px;
+  color: #d8dde8;
+}
+
+.emptyEditor p {
+  margin: 0;
+}
+
+.chatPanel {
+  background: #13161c;
+  border-left: 1px solid #252a35;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chatHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.chatHeader h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.chatHeader span {
+  color: #8a93a5;
+  font-size: 13px;
+}
+
+.passwordInput {
+  padding: 9px;
+  border: 1px solid #303746;
+  background: #101216;
+  color: white;
+  border-radius: 9px;
+  margin-bottom: 12px;
+  outline: none;
+  flex-shrink: 0;
+}
+
+.chatBox {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 3px;
+}
+
+.bubble {
+  padding: 10px 11px;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+  font-size: 14px;
+}
+
+.bubble.user {
+  background: #243044;
+  color: #ffffff;
+}
+
+.bubble.ai {
+  background: #1b1f29;
+  color: #dfe4ef;
+  border: 1px solid #282e3a;
+}
+
+.bubble.system {
+  background: #171b24;
+  color: #9fa8ba;
+  border: 1px dashed #343c4e;
+  font-style: italic;
+}
+
+.changesBox {
+  border: 1px solid #343c4e;
+  background: #191d25;
+  padding: 12px;
+  border-radius: 12px;
+  margin: 12px 0;
+  flex-shrink: 0;
+  max-height: 170px;
+  overflow: auto;
+}
+
+.changeItem {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.changeItem span {
+  color: #aab3c4;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.changeItem code {
+  color: #eef1f7;
+  word-break: break-all;
+}
+
+.changesBox button {
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px;
+  border: 0;
+  border-radius: 9px;
+  background: #f4f4f5;
+  color: #111318;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.messageBox {
+  height: 100px;
+  resize: none;
+  border: 1px solid #303746;
+  background: #101216;
+  color: white;
+  border-radius: 12px;
+  padding: 10px;
+  margin-top: 12px;
+  outline: none;
+  line-height: 1.45;
+  flex-shrink: 0;
+}
+
+.sendButton {
+  margin-top: 10px;
+  padding: 11px;
+  border: 0;
+  border-radius: 12px;
+  background: #f4f4f5;
+  color: #111318;
+  cursor: pointer;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.sendButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.toast {
+  position: fixed;
+  right: 18px;
+  top: 18px;
+  z-index: 50;
+  background: #f4f4f5;
+  color: #111318;
+  border-radius: 12px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
+}
+
+.dropOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(16, 18, 22, 0.72);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.dropOverlay div {
+  border: 2px dashed #d7dce7;
+  background: rgba(25, 29, 37, 0.9);
+  color: white;
+  padding: 34px 44px;
+  border-radius: 20px;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.dragging .editor,
+.dragging .sidebar,
+.dragging .chatPanel {
+  filter: brightness(0.75);
+}
+
+@media (max-width: 1100px) {
+  .appShell {
+    min-width: 900px;
+    grid-template-columns: 230px minmax(0, 1fr) 310px;
+  }
+}
