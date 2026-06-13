@@ -22,6 +22,8 @@ type AiResponse = {
   type?: "answer" | "edit";
   message?: string;
   changes?: AiChange[];
+  provider?: string;
+  model?: string;
   error?: string;
 };
 
@@ -32,15 +34,65 @@ type TreeNode = {
   children: TreeNode[];
 };
 
-const MODEL_OPTIONS = [
-  { value: "gpt-4.1-mini", label: "GPT-4.1 mini — cheap / reliable" },
-  { value: "gpt-4.1", label: "GPT-4.1 — stronger coding" },
-  { value: "gpt-4o-mini", label: "GPT-4o mini — cheap fallback" },
-  { value: "gpt-5.4-mini", label: "GPT-5.4 mini — best coding value" },
-  { value: "gpt-5.4", label: "GPT-5.4 — stronger / more expensive" },
-  { value: "gpt-5.5", label: "GPT-5.5 — newest / most expensive" },
-  { value: "custom", label: "Custom model ID" }
+const PROVIDER_OPTIONS = [
+  { value: "auto", label: "Auto fallback" },
+  { value: "openai", label: "OpenAI" },
+  { value: "gemini", label: "Google Gemini" }
 ];
+
+const MODEL_GROUPS = [
+  {
+    provider: "openai",
+    label: "OpenAI",
+    models: [
+      { value: "gpt-5.5", label: "gpt-5.5 - strongest coding" },
+      { value: "gpt-5.5-pro", label: "gpt-5.5-pro - highest accuracy" },
+      { value: "gpt-5.4", label: "gpt-5.4 - strong / cheaper" },
+      { value: "gpt-5.4-pro", label: "gpt-5.4-pro - high accuracy" },
+      { value: "gpt-5.4-mini", label: "gpt-5.4-mini - default value" },
+      { value: "gpt-5.4-nano", label: "gpt-5.4-nano - cheapest" },
+      { value: "chat-latest", label: "chat-latest" },
+      { value: "gpt-5.3-codex", label: "gpt-5.3-codex - coding agent" },
+      { value: "gpt-5.2", label: "gpt-5.2" },
+      { value: "gpt-5.2-pro", label: "gpt-5.2-pro" },
+      { value: "gpt-5.1", label: "gpt-5.1" },
+      { value: "gpt-5", label: "gpt-5" },
+      { value: "gpt-5-pro", label: "gpt-5-pro" },
+      { value: "gpt-5-mini", label: "gpt-5-mini" },
+      { value: "gpt-5-nano", label: "gpt-5-nano" },
+      { value: "o3-pro", label: "o3-pro" },
+      { value: "o3", label: "o3" },
+      { value: "gpt-4.1", label: "gpt-4.1" },
+      { value: "gpt-4.1-mini", label: "gpt-4.1-mini" },
+      { value: "gpt-4o-mini", label: "gpt-4o-mini" }
+    ]
+  },
+  {
+    provider: "gemini",
+    label: "Google",
+    models: [
+      { value: "gemini-3.1-pro-preview", label: "gemini-3.1-pro-preview - strongest" },
+      { value: "gemini-3.5-flash", label: "gemini-3.5-flash" },
+      { value: "gemini-3-flash-preview", label: "gemini-3-flash-preview" },
+      { value: "gemini-3.1-flash-lite", label: "gemini-3.1-flash-lite - default value" },
+      { value: "gemini-2.5-pro", label: "gemini-2.5-pro" },
+      { value: "gemini-2.5-flash", label: "gemini-2.5-flash" },
+      { value: "gemini-2.5-flash-lite", label: "gemini-2.5-flash-lite" }
+    ]
+  }
+];
+
+const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
+  openai: "gpt-5.4-mini",
+  gemini: "gemini-3.1-flash-lite"
+};
+
+const ALL_MODEL_VALUES = MODEL_GROUPS.flatMap((group) => group.models.map((model) => model.value));
+
+function isModelAllowedForProvider(provider: string, model: string) {
+  if (provider === "auto") return ALL_MODEL_VALUES.includes(model);
+  return MODEL_GROUPS.some((group) => group.provider === provider && group.models.some((item) => item.value === model));
+}
 
 
 function cleanPath(path: string) {
@@ -103,16 +155,16 @@ function buildTree(files: ProjectFile[]) {
 }
 
 function getFileIcon(path: string) {
-  if (path.endsWith(".py")) return "🐍";
+  if (path.endsWith(".py")) return "PY";
   if (path.endsWith(".tsx") || path.endsWith(".ts")) return "TS";
   if (path.endsWith(".jsx") || path.endsWith(".js")) return "JS";
-  if (path.endsWith(".html")) return "🌐";
+  if (path.endsWith(".html")) return "HT";
   if (path.endsWith(".css")) return "#";
   if (path.endsWith(".json")) return "{}";
   if (path.endsWith(".md")) return "MD";
-  if (path.endsWith(".env")) return "🔐";
+  if (path.endsWith(".env")) return "ENV";
   if (path.endsWith(".zip")) return "ZIP";
-  return "📄";
+  return "TXT";
 }
 
 function getLanguage(path: string) {
@@ -297,8 +349,8 @@ export default function Home() {
   const [newItemName, setNewItemName] = useState("");
   const [message, setMessage] = useState("");
   const [password, setPassword] = useState("");
+  const [selectedProvider, setSelectedProvider] = useState("openai");
   const [selectedModel, setSelectedModel] = useState("gpt-5.4-mini");
-  const [customModel, setCustomModel] = useState("");
   const [chat, setChat] = useState<{ role: "user" | "ai" | "system"; text: string }[]>([]);
   const [pendingChanges, setPendingChanges] = useState<AiChange[]>([]);
   const [previewChangeIndex, setPreviewChangeIndex] = useState<number | null>(null);
@@ -333,8 +385,8 @@ export default function Home() {
     setFiles(data.files || []);
     setActivePath(data.activePath || "");
     setSelectedFolder(data.selectedFolder || "");
-    setSelectedModel(data.selectedModel || "gpt-5.4-mini");
-    setCustomModel(data.customModel || "");
+    setSelectedProvider(data.selectedProvider || "openai");
+    setSelectedModel(ALL_MODEL_VALUES.includes(data.selectedModel) ? data.selectedModel : "gpt-5.4-mini");
   }, []);
 
   useEffect(() => {
@@ -346,11 +398,16 @@ export default function Home() {
         files,
         activePath,
         selectedFolder,
-        selectedModel,
-        customModel
+        selectedProvider,
+        selectedModel
       })
     );
-  }, [projectName, projectCreated, files, activePath, selectedFolder, selectedModel, customModel]);
+  }, [projectName, projectCreated, files, activePath, selectedFolder, selectedProvider, selectedModel]);
+
+  useEffect(() => {
+    if (selectedProvider === "auto" || isModelAllowedForProvider(selectedProvider, selectedModel)) return;
+    setSelectedModel(DEFAULT_MODEL_BY_PROVIDER[selectedProvider] || "gpt-5.4-mini");
+  }, [selectedProvider, selectedModel]);
 
   useEffect(() => {
     if (!toast) return;
@@ -587,10 +644,6 @@ export default function Home() {
   }
 
   function getActiveModel() {
-    if (selectedModel === "custom") {
-      return customModel.trim() || "gpt-5.4-mini";
-    }
-
     return selectedModel;
   }
 
@@ -605,7 +658,7 @@ export default function Home() {
     setChat((current) => [
       ...current,
       { role: "user", text: userMessage },
-      { role: "system", text: `${getActiveModel()} is thinking...` }
+      { role: "system", text: `${selectedProvider} / ${getActiveModel()} is thinking...` }
     ]);
 
     try {
@@ -616,11 +669,14 @@ export default function Home() {
         },
         body: JSON.stringify({
           password,
+          provider: selectedProvider,
           model: getActiveModel(),
+          messages: [{ role: "user", content: userMessage }],
           message: userMessage,
           activePath,
           selectedFolder,
-          files
+          files,
+          mode: "code-edit"
         })
       });
 
@@ -733,8 +789,8 @@ export default function Home() {
             <button
               className={
                 selectedFolder === node.path || dropFolder === node.path
-                  ? "treeItem selectedFolder"
-                  : "treeItem"
+                  ? "treeItem folderItem selectedFolder"
+                  : "treeItem folderItem"
               }
               style={{ paddingLeft: `${12 + depth * 16}px` }}
               onClick={() => {
@@ -756,8 +812,8 @@ export default function Home() {
                 setDropFolder("");
               }}
             >
-              <span className="folderIcon">▸</span>
-              <span className="folderEmoji">📁</span>
+              <span className="folderIcon">&gt;</span>
+              <span className="folderEmoji">DIR</span>
               <span>{node.name}</span>
               <span
                 className="deleteIcon"
@@ -767,11 +823,13 @@ export default function Home() {
                   deleteFolder(node.path);
                 }}
               >
-                ×
+                x
               </span>
             </button>
 
-            {renderTree(node.children, depth + 1)}
+            <div className="treeBranch">
+              {renderTree(node.children, depth + 1)}
+            </div>
           </div>
         );
       }
@@ -782,7 +840,7 @@ export default function Home() {
         <button
           key={node.path}
           draggable
-          className={activePath === node.path && !previewChange ? "treeItem activeFile" : "treeItem"}
+          className={activePath === node.path && !previewChange ? "treeItem fileItem activeFile" : "treeItem fileItem"}
           style={{ paddingLeft: `${12 + depth * 16}px` }}
           onClick={() => {
             setActivePath(node.path);
@@ -808,7 +866,7 @@ export default function Home() {
               deleteFile(node.path);
             }}
           >
-            ×
+            x
           </span>
         </button>
       );
@@ -897,17 +955,22 @@ export default function Home() {
           />
 
           <div className="newButtons">
-            <button onClick={addFile}>＋ File</button>
-            <button onClick={addFolder}>＋ Folder</button>
+            <button onClick={addFile}>+ File</button>
+            <button onClick={addFolder}>+ Folder</button>
           </div>
         </div>
 
         <div className="treeRoot">
+          <div className="treeSectionTitle">
+            <span>Files</span>
+            <strong>{files.filter((file) => !file.path.endsWith("/.keep")).length}</strong>
+          </div>
+
           <button
             className={
               selectedFolder === "" || dropFolder === "__root__"
-                ? "treeItem selectedFolder"
-                : "treeItem"
+                ? "treeItem folderItem rootItem selectedFolder"
+                : "treeItem folderItem rootItem"
             }
             onClick={() => {
               setSelectedFolder("");
@@ -928,7 +991,7 @@ export default function Home() {
               setDropFolder("");
             }}
           >
-            <span className="folderEmoji">📁</span>
+            <span className="folderEmoji">DIR</span>
             <span>/</span>
           </button>
 
@@ -978,57 +1041,100 @@ export default function Home() {
 
       <aside className="chatPanel">
         <div className="chatHeader">
-          <h2>AI Editor</h2>
+          <div>
+            <div className="label">ASSISTANT</div>
+            <h2>AI Editor</h2>
+          </div>
           <span>{files.filter((file) => !file.path.endsWith("/.keep")).length} files</span>
         </div>
 
-        <input
-          className="passwordInput"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="App password"
-          type="password"
-        />
+        <div className="assistantControls">
+          <details className="passwordDropdown">
+            <summary>
+              <span>App password</span>
+              <strong>{password ? "Set" : "Required"}</strong>
+            </summary>
 
-        <div className="modelBox">
-          <label>Model</label>
-
-          <select
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-          >
-            {MODEL_OPTIONS.map((model) => (
-              <option key={model.value} value={model.value}>
-                {model.label}
-              </option>
-            ))}
-          </select>
-
-          {selectedModel === "custom" && (
             <input
-              value={customModel}
-              onChange={(e) => setCustomModel(e.target.value)}
-              placeholder="example: gpt-5.4-mini"
+              className="passwordInput"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter app password"
+              type="password"
             />
-          )}
+          </details>
+
+          <div className="modelBox">
+            <div className="modelField">
+              <label>Provider</label>
+
+              <select
+                value={selectedProvider}
+                onChange={(e) => setSelectedProvider(e.target.value)}
+              >
+                {PROVIDER_OPTIONS.map((provider) => (
+                  <option key={provider.value} value={provider.value}>
+                    {provider.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="modelField">
+              <label>Model</label>
+
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+              >
+                {MODEL_GROUPS.map((group) => (
+                  <optgroup key={group.provider} label={group.label}>
+                    {group.models.map((model) => (
+                      <option
+                        key={model.value}
+                        value={model.value}
+                        disabled={selectedProvider !== "auto" && selectedProvider !== group.provider}
+                      >
+                        {model.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
 
-        <div className="chatBox">
-          {chat.map((item, index) => (
-            <div
-              key={index}
-              className={
-                item.role === "user"
-                  ? "bubble user"
-                  : item.role === "system"
-                    ? "bubble system"
-                    : "bubble ai"
-              }
-            >
-              {item.text}
-            </div>
-          ))}
-        </div>
+        <section className="conversation">
+          <div className="panelTitle">
+            <span>Conversation</span>
+            <strong>{selectedProvider} / {selectedModel}</strong>
+          </div>
+
+          <div className="chatBox">
+            {chat.length === 0 ? (
+              <div className="chatEmpty">
+                <strong>Ready when you are.</strong>
+                <span>Ask for a file, a refactor, a bug fix, or an explanation.</span>
+              </div>
+            ) : (
+              chat.map((item, index) => (
+                <div
+                  key={index}
+                  className={
+                    item.role === "user"
+                      ? "bubble user"
+                      : item.role === "system"
+                        ? "bubble system"
+                        : "bubble ai"
+                  }
+                >
+                  {item.text}
+                </div>
+              ))
+            )}
+          </div>
+        </section>
 
         {pendingChanges.length > 0 && (
           <div className="changesBox">
@@ -1059,16 +1165,18 @@ export default function Home() {
           </div>
         )}
 
-        <textarea
-          className="messageBox"
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder="Ask AI to explain, refactor, fix bugs, or create files..."
-        />
+        <div className="composer">
+          <textarea
+            className="messageBox"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Ask AI to explain, refactor, fix bugs, or create files..."
+          />
 
-        <button className="sendButton" onClick={askAi} disabled={loading}>
-          {loading ? "Thinking..." : "Send"}
-        </button>
+          <button className="sendButton" onClick={askAi} disabled={loading}>
+            {loading ? "Thinking..." : "Send"}
+          </button>
+        </div>
       </aside>
     </main>
   );
