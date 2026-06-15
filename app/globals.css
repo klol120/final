@@ -176,7 +176,7 @@ textarea:focus {
   height: 100vh;
   min-width: 1080px;
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 430px;
+  grid-template-columns: var(--sidebar-width, 320px) 7px minmax(0, 1fr) 430px;
   overflow: hidden;
   background: var(--bg);
 }
@@ -194,7 +194,7 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   padding: 18px;
-  overflow: auto;
+  overflow: hidden;
   border-right: 1px solid var(--border-soft);
 }
 
@@ -302,6 +302,8 @@ textarea:focus {
   flex-direction: column;
   gap: 5px;
   padding-top: 2px;
+  min-height: 0;
+  overflow: auto;
 }
 
 .treeItem {
@@ -317,10 +319,13 @@ textarea:focus {
   color: var(--text-soft);
   text-align: left;
   overflow: hidden;
+  cursor: pointer;
+  user-select: none;
 }
 
-.treeItem span:nth-child(2),
-.treeItem span:nth-child(3) {
+.treeLabel {
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -345,6 +350,15 @@ textarea:focus {
 .folderIcon {
   color: var(--muted);
   font-size: 10px;
+  width: 12px;
+  flex: 0 0 12px;
+  transform: rotate(0deg);
+  transition: transform 140ms ease, color 140ms ease;
+}
+
+.folderIcon.open {
+  color: var(--gold-soft);
+  transform: rotate(90deg);
 }
 
 .folderEmoji,
@@ -377,6 +391,27 @@ textarea:focus {
   color: var(--muted);
   opacity: 0;
   flex-shrink: 0;
+  cursor: pointer;
+}
+
+.sidebarResizeHandle {
+  width: 7px;
+  height: 100%;
+  border: 0;
+  border-left: 1px solid var(--border-soft);
+  border-right: 1px solid rgba(255, 255, 255, 0.03);
+  border-radius: 0;
+  background: #080a0c;
+  cursor: col-resize;
+  padding: 0;
+  z-index: 5;
+}
+
+.sidebarResizeHandle:hover,
+.resizingSidebar .sidebarResizeHandle {
+  background:
+    linear-gradient(90deg, transparent 0 2px, var(--gold) 2px 4px, transparent 4px),
+    #101419;
 }
 
 .treeItem:hover .deleteIcon {
@@ -781,7 +816,7 @@ textarea:focus {
 @media (max-width: 1180px) {
   .appShell {
     min-width: 960px;
-    grid-template-columns: 260px minmax(0, 1fr) 380px;
+    grid-template-columns: var(--sidebar-width, 280px) 7px minmax(0, 1fr) 380px;
   }
 
   .sidebar,
@@ -796,7 +831,7 @@ textarea:focus {
 
 /* Final layout correction: clear hierarchy, visible chat, distinct files/folders */
 .appShell {
-  grid-template-columns: 320px minmax(0, 1fr) 460px;
+  grid-template-columns: var(--sidebar-width, 320px) 7px minmax(0, 1fr) 460px;
   background:
     linear-gradient(90deg, #08090b, #101216 32%, #08090b),
     var(--bg);
@@ -849,7 +884,7 @@ textarea:focus {
 }
 
 .treeBranch {
-  margin-left: 16px;
+  margin-left: 12px;
   padding-left: 10px;
   border-left: 1px solid rgba(141, 152, 163, 0.18);
 }
@@ -858,6 +893,10 @@ textarea:focus {
   min-height: 36px;
   padding-right: 8px;
   border-radius: 7px;
+}
+
+.collapsedFolder {
+  color: #d7c183;
 }
 
 .folderItem {
@@ -1052,7 +1091,7 @@ textarea:focus {
 
 @media (max-width: 1180px) {
   .appShell {
-    grid-template-columns: 280px minmax(0, 1fr) 400px;
+    grid-template-columns: var(--sidebar-width, 280px) 7px minmax(0, 1fr) 400px;
   }
 
   .modelBox {
