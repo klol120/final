@@ -37,7 +37,8 @@ type TreeNode = {
 const PROVIDER_OPTIONS = [
   { value: "auto", label: "Auto fallback" },
   { value: "openai", label: "OpenAI" },
-  { value: "gemini", label: "Google Gemini" }
+  { value: "gemini", label: "Google Gemini" },
+  { value: "grok", label: "xAI Grok" }
 ];
 
 const MODEL_GROUPS = [
@@ -79,12 +80,25 @@ const MODEL_GROUPS = [
       { value: "gemini-2.5-flash", label: "gemini-2.5-flash" },
       { value: "gemini-2.5-flash-lite", label: "gemini-2.5-flash-lite" }
     ]
+  },
+  {
+    provider: "grok",
+    label: "xAI Grok",
+    models: [
+      { value: "grok-4.3", label: "grok-4.3 - default flagship" },
+      { value: "grok-4.3-latest", label: "grok-4.3-latest - newest 4.3 alias" },
+      { value: "grok-latest", label: "grok-latest - newest stable alias" },
+      { value: "grok-build-0.1", label: "grok-build-0.1 - coding model" },
+      { value: "grok-code-fast-1", label: "grok-code-fast-1 - coding alias" },
+      { value: "grok-code-fast", label: "grok-code-fast - fast coding alias" }
+    ]
   }
 ];
 
 const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
   openai: "gpt-5.4-mini",
-  gemini: "gemini-3.1-flash-lite"
+  gemini: "gemini-3.1-flash-lite",
+  grok: "grok-4.3"
 };
 
 const ALL_MODEL_VALUES = MODEL_GROUPS.flatMap((group) => group.models.map((model) => model.value));

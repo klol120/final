@@ -1,14 +1,16 @@
 import { callGemini, GEMINI_MODELS, GEMINI_PROVIDER } from "./providers/geminiProvider.js";
+import { callGrok, GROK_MODELS, GROK_PROVIDER } from "./providers/grokProvider.js";
 import { callOpenAI, OPENAI_MODELS, OPENAI_PROVIDER } from "./providers/openaiProvider.js";
 
 export const AUTO_PROVIDER = "auto";
 
 export const PROVIDER_MODELS = {
   [OPENAI_PROVIDER]: OPENAI_MODELS,
-  [GEMINI_PROVIDER]: GEMINI_MODELS
+  [GEMINI_PROVIDER]: GEMINI_MODELS,
+  [GROK_PROVIDER]: GROK_MODELS
 };
 
-export const ALLOWED_PROVIDERS = [OPENAI_PROVIDER, GEMINI_PROVIDER, AUTO_PROVIDER];
+export const ALLOWED_PROVIDERS = [OPENAI_PROVIDER, GEMINI_PROVIDER, GROK_PROVIDER, AUTO_PROVIDER];
 
 export function getDefaultProvider() {
   const configured = process.env.DEFAULT_AI_PROVIDER || OPENAI_PROVIDER;
@@ -19,6 +21,11 @@ export function getDefaultModel(provider) {
   if (provider === GEMINI_PROVIDER) {
     const configured = process.env.DEFAULT_GEMINI_MODEL || "gemini-3.1-flash-lite";
     return GEMINI_MODELS.includes(configured) ? configured : GEMINI_MODELS[0];
+  }
+
+  if (provider === GROK_PROVIDER) {
+    const configured = process.env.DEFAULT_GROK_MODEL || "grok-4.3";
+    return GROK_MODELS.includes(configured) ? configured : GROK_MODELS[0];
   }
 
   const configured = process.env.DEFAULT_OPENAI_MODEL || "gpt-5.4-mini";
@@ -68,7 +75,15 @@ export function resolveProviderAndModel({ provider, model }) {
       };
     }
 
-    const error = new Error("Missing API key. Set OPENAI_API_KEY or GEMINI_API_KEY for auto provider fallback.");
+    if (process.env.XAI_API_KEY || process.env.GROK_API_KEY) {
+      return {
+        provider: GROK_PROVIDER,
+        requestedProvider,
+        model: GROK_MODELS.includes(model) ? model : getDefaultModel(GROK_PROVIDER)
+      };
+    }
+
+    const error = new Error("Missing API key. Set OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, or GROK_API_KEY for auto provider fallback.");
     error.status = 500;
     throw error;
   }
@@ -108,6 +123,10 @@ export async function callAi({ provider, model, instructions, input }) {
 
   if (provider === GEMINI_PROVIDER) {
     return callGemini({ model, instructions, input });
+  }
+
+  if (provider === GROK_PROVIDER) {
+    return callGrok({ model, instructions, input });
   }
 
   const error = new Error(`Invalid provider "${provider}".`);
