@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@google/genai": "^2.8.0",
     "@monaco-editor/react": "^4.7.0",
     "jszip": "^3.10.1",
     "next": "^15.3.4",

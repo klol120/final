@@ -1,37 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
+import {
+  assertInputWithinLimit,
+  callAi,
+  getDefaultProvider,
+  resolveProviderAndModel,
+  validateProviderModel
+} from "../../../server/ai/aiRouter.js";
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
-const ALLOWED_MODELS = new Set([
-  "gpt-4.1-mini",
-  "gpt-4.1",
-  "gpt-4o-mini",
-  "gpt-5.4",
-  "gpt-5.5"
-]);
-
-const DEFAULT_MODEL = "gpt-4.1-mini";
 const MAX_SELECTED_FILES = 8;
 const MAX_FILE_CHARS = 18000;
 const MAX_TOTAL_FILE_CHARS = 65000;
 const MAX_FILE_INDEX_ITEMS = 700;
-const HARD_INPUT_TOKEN_LIMIT = 30000;
 
 type ProjectFile = {
   path: string;
   content: string;
 };
 
+type ChatMessage = {
+  role?: string;
+  content?: string;
+};
+
 type RequestBody = {
   password: string;
+  provider?: string;
   model?: string;
-  message: string;
+  message?: string;
+  messages?: ChatMessage[];
   activePath?: string;
   selectedFolder?: string;
   files: ProjectFile[];
+  mode?: "chat" | "code-edit";
 };
 
 type PickFilesResponse = {
@@ -41,20 +41,6 @@ type PickFilesResponse = {
 
 function cleanPath(path: string) {
   return path.replaceAll("\\", "/").replace(/^\/+/, "").replace(/\/+/g, "/");
-}
-
-function getRequestedModel(model?: string) {
-  const requested = model?.trim() || DEFAULT_MODEL;
-
-  if (ALLOWED_MODELS.has(requested)) {
-    return requested;
-  }
-
-  if (/^gpt-[a-zA-Z0-9.\-_]+$/.test(requested)) {
-    return requested;
-  }
-
-  return DEFAULT_MODEL;
 }
 
 function estimateTokens(text: string) {
@@ -127,7 +113,79 @@ function getLocalCandidatePaths(files: ProjectFile[], message: string, activePat
     .map((item) => item.path);
 }
 
-async function pickRelevantFiles(model: string, files: ProjectFile[], message: string, activePath?: string, selectedFolder?: string) {
+function getMessageText(body: RequestBody) {
+  if (body.messages?.length) {
+    return body.messages
+      .map((item) => `${item.role || "user"}: ${item.content || ""}`)
+      .join("\n\n")
+      .trim();
+  }
+
+  return (body.message || "").trim();
+}
+
+function getLatestUserMessage(body: RequestBody) {
+  const latestUserMessage = [...(body.messages || [])]
+    .reverse()
+    .find((item) => item.role === "user" && item.content?.trim());
+
+  return latestUserMessage?.content?.trim() || body.message?.trim() || getMessageText(body);
+}
+
+function safeRaw(raw: unknown) {
+  try {
+    return JSON.parse(JSON.stringify(raw));
+  } catch {
+    return null;
+  }
+}
+
+function parseAiJson(text: string) {
+  const trimmed = text.trim();
+  const unfenced = trimmed
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  try {
+    return JSON.parse(unfenced);
+  } catch {
+    const firstBrace = unfenced.indexOf("{");
+    const lastBrace = unfenced.lastIndexOf("}");
+
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      return JSON.parse(unfenced.slice(firstBrace, lastBrace + 1));
+    }
+
+    throw new Error("AI response was not valid JSON.");
+  }
+}
+
+function normalizeAiEditResponse(parsed: any) {
+  if (parsed?.type !== "edit" || !Array.isArray(parsed.changes)) {
+    return parsed;
+  }
+
+  return {
+    ...parsed,
+    changes: parsed.changes
+      .filter((change: any) => {
+        return (
+          change &&
+          ["create", "update", "delete"].includes(change.action) &&
+          typeof change.path === "string" &&
+          (change.action === "delete" || typeof change.content === "string")
+        );
+      })
+      .map((change: any) => ({
+        action: change.action,
+        path: cleanPath(change.path),
+        ...(change.action === "delete" ? {} : { content: change.content })
+      }))
+  };
+}
+
+async function pickRelevantFiles(provider: string, model: string, files: ProjectFile[], message: string, activePath?: string, selectedFolder?: string) {
   const localCandidates = getLocalCandidatePaths(files, message, activePath, selectedFolder);
 
   const fileIndex = files
@@ -156,13 +214,14 @@ PROJECT FILE INDEX:
 ${JSON.stringify(fileIndex, null, 2)}
 `;
 
-  const pickerTokens = estimateTokens(pickerInput);
-
-  if (pickerTokens > HARD_INPUT_TOKEN_LIMIT) {
+  try {
+    assertInputWithinLimit(pickerInput, "file picker input");
+  } catch {
     return localCandidates.slice(0, 3);
   }
 
-  const response = await client.responses.create({
+  const response = await callAi({
+    provider,
     model,
     instructions: `
 You are choosing which project files are needed for a coding request.
@@ -185,7 +244,7 @@ Rules:
   });
 
   try {
-    const parsed = JSON.parse(response.output_text) as PickFilesResponse;
+    const parsed = parseAiJson(response.text) as PickFilesResponse;
     const validPaths = new Set(files.map((file) => file.path));
 
     const picked = (parsed.paths || [])
@@ -231,20 +290,43 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as RequestBody;
 
-    if (!process.env.APP_PASSWORD || body.password !== process.env.APP_PASSWORD) {
+    const configuredPassword = process.env.APP_PASSWORD?.trim();
+
+    if (!configuredPassword) {
+      return NextResponse.json(
+        { error: "APP_PASSWORD is not configured. Create .env.local from .env.local.example and restart the dev server." },
+        { status: 500 }
+      );
+    }
+
+    if ((body.password || "").trim() !== configuredPassword) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const model = getRequestedModel(body.model);
+    const requested = resolveProviderAndModel({
+      provider: body.provider || getDefaultProvider(),
+      model: body.model?.trim() || undefined
+    });
+    validateProviderModel(requested.provider, requested.model);
+
+    const messageText = getMessageText(body);
+    const latestUserMessage = getLatestUserMessage(body);
+    const mode = body.mode || "code-edit";
+
+    if (!latestUserMessage) {
+      return NextResponse.json({ error: "Message is required." }, { status: 400 });
+    }
+
     const files = (body.files || []).map((file) => ({
       path: cleanPath(file.path),
       content: file.content || ""
     }));
 
     const selectedPaths = await pickRelevantFiles(
-      model,
+      requested.provider,
+      requested.model,
       files,
-      body.message,
+      latestUserMessage,
       body.activePath,
       body.selectedFolder
     );
@@ -258,11 +340,20 @@ export async function POST(req: NextRequest) {
       .join("\n");
 
     const finalInput = `
+PROVIDER USED:
+${requested.provider}
+
 MODEL USED:
-${model}
+${requested.model}
+
+MODE:
+${mode}
 
 USER REQUEST:
-${body.message}
+${latestUserMessage}
+
+MESSAGES:
+${messageText}
 
 ACTIVE FILE:
 ${body.activePath || "none"}
@@ -282,22 +373,25 @@ ${selectedFileContext || "No selected file contents. This may be a create-only o
 
     const finalInputTokens = estimateTokens(finalInput);
 
-    if (finalInputTokens > HARD_INPUT_TOKEN_LIMIT) {
+    try {
+      assertInputWithinLimit(finalInput, "final AI input");
+    } catch (error) {
       return NextResponse.json(
         {
           type: "answer",
-          error: `Aborted before calling OpenAI. Estimated input is ${finalInputTokens.toLocaleString()} tokens, above the ${HARD_INPUT_TOKEN_LIMIT.toLocaleString()} token safety limit.`,
-          message: `Aborted to protect your credits. Estimated input: ${finalInputTokens.toLocaleString()} tokens. Limit: ${HARD_INPUT_TOKEN_LIMIT.toLocaleString()} tokens. Open/select a smaller file, ask about a specific file, or reduce imported files.`,
+          error: error instanceof Error ? error.message : "Input too large.",
+          message: error instanceof Error ? error.message : "Input too large.",
           usedFiles: selectedPaths,
           estimatedTokens: finalInputTokens,
-          tokenLimit: HARD_INPUT_TOKEN_LIMIT
+          maxInputChars: Number(process.env.MAX_INPUT_CHARS || "120000")
         },
         { status: 413 }
       );
     }
 
-    const response = await client.responses.create({
-      model,
+    const response = await callAi({
+      provider: requested.provider,
+      model: requested.model,
       instructions: `
 You are a coding agent inside a web IDE.
 
@@ -340,6 +434,7 @@ Rules:
 - For update/create, return full final file content.
 - Never return partial diffs.
 - Never wrap JSON in markdown.
+- Do not include \`\`\`json fences. The first character of your response must be { and the last character must be }.
 `,
       input: finalInput
     });
@@ -347,29 +442,34 @@ Rules:
     let parsed;
 
     try {
-      parsed = JSON.parse(response.output_text);
+      parsed = normalizeAiEditResponse(parseAiJson(response.text));
     } catch {
       parsed = {
         type: "answer",
-        message: response.output_text
+        message: response.text
       };
     }
 
     return NextResponse.json({
       ...parsed,
+      provider: response.provider,
+      model: response.model,
+      text: response.text,
+      raw: safeRaw(response.raw),
       usedFiles: selectedPaths,
       estimatedTokens: finalInputTokens,
-      tokenLimit: HARD_INPUT_TOKEN_LIMIT
+      maxInputChars: Number(process.env.MAX_INPUT_CHARS || "120000")
     });
   } catch (error) {
     console.error(error);
+    const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 500;
+    const message = error instanceof Error ? error.message : "Server error.";
 
     return NextResponse.json(
       {
-        error:
-          "Server error. Token-saver mode is enabled, so check selected model/API key/Vercel logs."
+        error: message
       },
-      { status: 500 }
+      { status }
     );
   }
 }
