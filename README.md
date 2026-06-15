@@ -17,7 +17,7 @@ npm install
 
 ```env
 OPENAI_API_KEY=your_key
-XAI_API_KEY=your_grok_key
+GROQ_API_KEY=your_groq_key
 APP_PASSWORD=your_password
 ```
 
@@ -41,7 +41,7 @@ Add these environment variables in Vercel:
 
 ```env
 OPENAI_API_KEY=your_key
-XAI_API_KEY=your_grok_key
+GROQ_API_KEY=your_groq_key
 APP_PASSWORD=your_password
 ```
 

@@ -38,7 +38,7 @@ const PROVIDER_OPTIONS = [
   { value: "auto", label: "Auto fallback" },
   { value: "openai", label: "OpenAI" },
   { value: "gemini", label: "Google Gemini" },
-  { value: "grok", label: "xAI Grok" }
+  { value: "groq", label: "Groq" }
 ];
 
 const MODEL_GROUPS = [
@@ -82,15 +82,18 @@ const MODEL_GROUPS = [
     ]
   },
   {
-    provider: "grok",
-    label: "xAI Grok",
+    provider: "groq",
+    label: "Groq",
     models: [
-      { value: "grok-4.3", label: "grok-4.3 - default flagship" },
-      { value: "grok-4.3-latest", label: "grok-4.3-latest - newest 4.3 alias" },
-      { value: "grok-latest", label: "grok-latest - newest stable alias" },
-      { value: "grok-build-0.1", label: "grok-build-0.1 - coding model" },
-      { value: "grok-code-fast-1", label: "grok-code-fast-1 - coding alias" },
-      { value: "grok-code-fast", label: "grok-code-fast - fast coding alias" }
+      { value: "llama-3.3-70b-versatile", label: "llama-3.3-70b-versatile - general purpose" },
+      { value: "llama-3.1-8b-instant", label: "llama-3.1-8b-instant - fast / cheap" },
+      { value: "openai/gpt-oss-120b", label: "openai/gpt-oss-120b - reasoning" },
+      { value: "openai/gpt-oss-20b", label: "openai/gpt-oss-20b - fast reasoning" },
+      { value: "qwen/qwen3-32b", label: "qwen/qwen3-32b - coding / reasoning" },
+      { value: "meta-llama/llama-4-scout-17b-16e-instruct", label: "llama-4-scout - multimodal" },
+      { value: "allam-2-7b", label: "allam-2-7b - Arabic / English" },
+      { value: "groq/compound", label: "groq/compound - agentic tools" },
+      { value: "groq/compound-mini", label: "groq/compound-mini - fast agentic tools" }
     ]
   }
 ];
@@ -98,13 +101,19 @@ const MODEL_GROUPS = [
 const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
   openai: "gpt-5.4-mini",
   gemini: "gemini-3.1-flash-lite",
-  grok: "grok-4.3"
+  groq: "llama-3.3-70b-versatile"
 };
 
 const ALL_MODEL_VALUES = MODEL_GROUPS.flatMap((group) => group.models.map((model) => model.value));
+const ALL_PROVIDER_VALUES = PROVIDER_OPTIONS.map((provider) => provider.value);
 const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 620;
 const SIDEBAR_DEFAULT_WIDTH = 320;
+
+function normalizeProvider(provider: string) {
+  if (provider === "grok") return "groq";
+  return ALL_PROVIDER_VALUES.includes(provider) ? provider : "openai";
+}
 
 function isModelAllowedForProvider(provider: string, model: string) {
   if (provider === "auto") return ALL_MODEL_VALUES.includes(model);
@@ -404,13 +413,18 @@ export default function Home() {
     if (!saved) return;
 
     const data = JSON.parse(saved);
+    const savedProvider = normalizeProvider(data.selectedProvider || "openai");
+    const savedModel = ALL_MODEL_VALUES.includes(data.selectedModel)
+      ? data.selectedModel
+      : DEFAULT_MODEL_BY_PROVIDER[savedProvider] || "gpt-5.4-mini";
+
     setProjectName(data.projectName || "");
     setProjectCreated(data.projectCreated || false);
     setFiles(data.files || []);
     setActivePath(data.activePath || "");
     setSelectedFolder(data.selectedFolder || "");
-    setSelectedProvider(data.selectedProvider || "openai");
-    setSelectedModel(ALL_MODEL_VALUES.includes(data.selectedModel) ? data.selectedModel : "gpt-5.4-mini");
+    setSelectedProvider(savedProvider);
+    setSelectedModel(savedModel);
     setCollapsedFolders(Array.isArray(data.collapsedFolders) ? data.collapsedFolders : []);
     setSidebarWidth(
       typeof data.sidebarWidth === "number"
