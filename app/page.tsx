@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import type { DragEvent } from "react";
+import type { CSSProperties, DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
 
@@ -88,12 +88,18 @@ const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
 };
 
 const ALL_MODEL_VALUES = MODEL_GROUPS.flatMap((group) => group.models.map((model) => model.value));
+const SIDEBAR_MIN_WIDTH = 240;
+const SIDEBAR_MAX_WIDTH = 620;
+const SIDEBAR_DEFAULT_WIDTH = 320;
 
 function isModelAllowedForProvider(provider: string, model: string) {
   if (provider === "auto") return ALL_MODEL_VALUES.includes(model);
   return MODEL_GROUPS.some((group) => group.provider === provider && group.models.some((item) => item.value === model));
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
 
 function cleanPath(path: string) {
   return path.replaceAll("\\", "/").replace(/^\/+/, "").replace(/\/+/g, "/");
@@ -359,9 +365,13 @@ export default function Home() {
   const [draggedPath, setDraggedPath] = useState("");
   const [dropFolder, setDropFolder] = useState("");
   const [toast, setToast] = useState("");
+  const [collapsedFolders, setCollapsedFolders] = useState<string[]>([]);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const tree = useMemo(() => buildTree(files), [files]);
+  const appStyle = { "--sidebar-width": `${sidebarWidth}px` } as CSSProperties;
 
   const activeFile = useMemo(() => {
     return files.find((file) => file.path === activePath) || null;
@@ -387,6 +397,12 @@ export default function Home() {
     setSelectedFolder(data.selectedFolder || "");
     setSelectedProvider(data.selectedProvider || "openai");
     setSelectedModel(ALL_MODEL_VALUES.includes(data.selectedModel) ? data.selectedModel : "gpt-5.4-mini");
+    setCollapsedFolders(Array.isArray(data.collapsedFolders) ? data.collapsedFolders : []);
+    setSidebarWidth(
+      typeof data.sidebarWidth === "number"
+        ? clamp(data.sidebarWidth, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+        : SIDEBAR_DEFAULT_WIDTH
+    );
   }, []);
 
   useEffect(() => {
@@ -399,10 +415,12 @@ export default function Home() {
         activePath,
         selectedFolder,
         selectedProvider,
-        selectedModel
+        selectedModel,
+        collapsedFolders,
+        sidebarWidth
       })
     );
-  }, [projectName, projectCreated, files, activePath, selectedFolder, selectedProvider, selectedModel]);
+  }, [projectName, projectCreated, files, activePath, selectedFolder, selectedProvider, selectedModel, collapsedFolders, sidebarWidth]);
 
   useEffect(() => {
     if (selectedProvider === "auto" || isModelAllowedForProvider(selectedProvider, selectedModel)) return;
@@ -415,6 +433,32 @@ export default function Home() {
     const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!isResizingSidebar) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      setSidebarWidth(clamp(event.clientX, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH));
+    };
+
+    const stopResize = () => {
+      setIsResizingSidebar(false);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stopResize);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stopResize);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  }, [isResizingSidebar]);
 
   function createProject() {
     if (!projectName.trim()) return;
@@ -781,21 +825,44 @@ export default function Home() {
     setToast("Changes discarded");
   }
 
+  function toggleFolder(path: string) {
+    setCollapsedFolders((current) =>
+      current.includes(path) ? current.filter((item) => item !== path) : [...current, path]
+    );
+  }
+
+  function startSidebarResize(e: ReactMouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    setIsResizingSidebar(true);
+  }
+
   function renderTree(nodes: TreeNode[], depth = 0) {
     return nodes.map((node) => {
       if (node.type === "folder") {
+        const isCollapsed = collapsedFolders.includes(node.path);
+
         return (
           <div key={node.path}>
-            <button
+            <div
               className={
                 selectedFolder === node.path || dropFolder === node.path
-                  ? "treeItem folderItem selectedFolder"
-                  : "treeItem folderItem"
+                  ? `treeItem folderItem selectedFolder${isCollapsed ? " collapsedFolder" : ""}`
+                  : `treeItem folderItem${isCollapsed ? " collapsedFolder" : ""}`
               }
               style={{ paddingLeft: `${12 + depth * 16}px` }}
+              role="button"
+              tabIndex={0}
               onClick={() => {
                 setSelectedFolder(node.path);
                 setPreviewChangeIndex(null);
+                toggleFolder(node.path);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                setSelectedFolder(node.path);
+                setPreviewChangeIndex(null);
+                toggleFolder(node.path);
               }}
               onDragOver={(e) => {
                 if (!draggedPath) return;
@@ -812,9 +879,9 @@ export default function Home() {
                 setDropFolder("");
               }}
             >
-              <span className="folderIcon">&gt;</span>
+              <span className={isCollapsed ? "folderIcon" : "folderIcon open"}>&gt;</span>
               <span className="folderEmoji">DIR</span>
-              <span>{node.name}</span>
+              <span className="treeLabel" title={node.path}>{node.name}</span>
               <span
                 className="deleteIcon"
                 title="Delete folder"
@@ -825,11 +892,9 @@ export default function Home() {
               >
                 x
               </span>
-            </button>
-
-            <div className="treeBranch">
-              {renderTree(node.children, depth + 1)}
             </div>
+
+            {!isCollapsed && <div className="treeBranch">{renderTree(node.children, depth + 1)}</div>}
           </div>
         );
       }
@@ -857,7 +922,7 @@ export default function Home() {
           }}
         >
           <span className="fileIcon">{getFileIcon(node.path)}</span>
-          <span>{node.name}</span>
+          <span className="treeLabel" title={node.path}>{node.name}</span>
           <span
             className="deleteIcon"
             title="Delete file"
@@ -897,7 +962,8 @@ export default function Home() {
 
   return (
     <main
-      className={draggingExternal ? "appShell dragging" : "appShell"}
+      className={`${draggingExternal ? "appShell dragging" : "appShell"}${isResizingSidebar ? " resizingSidebar" : ""}`}
+      style={appStyle}
       onDragOver={(e) => {
         e.preventDefault();
 
@@ -992,12 +1058,20 @@ export default function Home() {
             }}
           >
             <span className="folderEmoji">DIR</span>
-            <span>/</span>
+            <span className="treeLabel" title="/">/</span>
           </button>
 
           {renderTree(tree)}
         </div>
       </aside>
+
+      <button
+        className="sidebarResizeHandle"
+        type="button"
+        aria-label="Resize files sidebar"
+        title="Drag to resize files sidebar"
+        onMouseDown={startSidebarResize}
+      />
 
       <section className="editor">
         {editorPath ? (
