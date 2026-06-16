@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+const MonacoDiffEditor = dynamic(() => import("@monaco-editor/react").then((module) => module.DiffEditor), { ssr: false });
 
 type ProjectFile = {
   path: string;
@@ -27,11 +28,26 @@ type AiResponse = {
   error?: string;
 };
 
+type ChatEntry = {
+  role: "user" | "ai" | "system";
+  text: string;
+  createdAt: string;
+  estimatedTokens: number;
+  transient?: boolean;
+};
+
 type TreeNode = {
   name: string;
   path: string;
   type: "folder" | "file";
   children: TreeNode[];
+};
+
+type DiffLine = {
+  type: "context" | "add" | "remove";
+  text: string;
+  oldLine?: number;
+  newLine?: number;
 };
 
 const PROVIDER_OPTIONS = [
@@ -126,6 +142,31 @@ function clamp(value: number, min: number, max: number) {
 
 function cleanPath(path: string) {
   return path.replaceAll("\\", "/").replace(/^\/+/, "").replace(/\/+/g, "/");
+}
+
+function createChatEntry(role: ChatEntry["role"], text: string, transient = false): ChatEntry {
+  return {
+    role,
+    text,
+    transient,
+    estimatedTokens: estimateTokens(text),
+    createdAt: new Date().toISOString()
+  };
+}
+
+function estimateTokens(text: string) {
+  return Math.max(1, Math.ceil(text.length / 3.5));
+}
+
+function formatChatTime(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function fileName(path: string) {
@@ -228,6 +269,111 @@ function isBinaryLike(path: string) {
     ".exe",
     ".dll"
   ].some((ext) => lower.endsWith(ext));
+}
+
+function buildLineDiff(before: string, after: string): DiffLine[] {
+  const oldLines = before.length > 0 ? before.split("\n") : [];
+  const newLines = after.length > 0 ? after.split("\n") : [];
+  const rows = oldLines.length + 1;
+  const cols = newLines.length + 1;
+  const table = Array.from({ length: rows }, () => Array(cols).fill(0) as number[]);
+
+  for (let oldIndex = oldLines.length - 1; oldIndex >= 0; oldIndex -= 1) {
+    for (let newIndex = newLines.length - 1; newIndex >= 0; newIndex -= 1) {
+      if (oldLines[oldIndex] === newLines[newIndex]) {
+        table[oldIndex][newIndex] = table[oldIndex + 1][newIndex + 1] + 1;
+      } else {
+        table[oldIndex][newIndex] = Math.max(table[oldIndex + 1][newIndex], table[oldIndex][newIndex + 1]);
+      }
+    }
+  }
+
+  const diff: DiffLine[] = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+
+  while (oldIndex < oldLines.length && newIndex < newLines.length) {
+    if (oldLines[oldIndex] === newLines[newIndex]) {
+      diff.push({
+        type: "context",
+        text: oldLines[oldIndex],
+        oldLine: oldIndex + 1,
+        newLine: newIndex + 1
+      });
+      oldIndex += 1;
+      newIndex += 1;
+    } else if (table[oldIndex + 1][newIndex] >= table[oldIndex][newIndex + 1]) {
+      diff.push({
+        type: "remove",
+        text: oldLines[oldIndex],
+        oldLine: oldIndex + 1
+      });
+      oldIndex += 1;
+    } else {
+      diff.push({
+        type: "add",
+        text: newLines[newIndex],
+        newLine: newIndex + 1
+      });
+      newIndex += 1;
+    }
+  }
+
+  while (oldIndex < oldLines.length) {
+    diff.push({
+      type: "remove",
+      text: oldLines[oldIndex],
+      oldLine: oldIndex + 1
+    });
+    oldIndex += 1;
+  }
+
+  while (newIndex < newLines.length) {
+    diff.push({
+      type: "add",
+      text: newLines[newIndex],
+      newLine: newIndex + 1
+    });
+    newIndex += 1;
+  }
+
+  return diff;
+}
+
+function compactDiffLines(lines: DiffLine[], contextRadius = 3, maxLines = 220) {
+  const interesting = new Set<number>();
+
+  lines.forEach((line, index) => {
+    if (line.type === "context") return;
+
+    for (let offset = -contextRadius; offset <= contextRadius; offset += 1) {
+      const nearby = index + offset;
+      if (nearby >= 0 && nearby < lines.length) {
+        interesting.add(nearby);
+      }
+    }
+  });
+
+  if (interesting.size === 0) {
+    return lines.slice(0, 24);
+  }
+
+  const compacted: Array<DiffLine | { type: "gap" }> = [];
+  let previous = -2;
+
+  Array.from(interesting)
+    .sort((a, b) => a - b)
+    .slice(0, maxLines)
+    .forEach((index) => {
+      if (previous >= 0 && index > previous + 1) {
+        compacted.push({ type: "gap" });
+      }
+
+      compacted.push(lines[index]);
+      previous = index;
+    });
+
+  return compacted;
 }
 
 function shouldIgnoreImportedPath(path: string) {
@@ -380,9 +526,10 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [selectedProvider, setSelectedProvider] = useState("openai");
   const [selectedModel, setSelectedModel] = useState("gpt-5.4-mini");
-  const [chat, setChat] = useState<{ role: "user" | "ai" | "system"; text: string }[]>([]);
+  const [chat, setChat] = useState<ChatEntry[]>([]);
   const [pendingChanges, setPendingChanges] = useState<AiChange[]>([]);
   const [previewChangeIndex, setPreviewChangeIndex] = useState<number | null>(null);
+  const [proposalBaseline, setProposalBaseline] = useState<ProjectFile[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [draggingExternal, setDraggingExternal] = useState(false);
   const [draggedPath, setDraggedPath] = useState("");
@@ -392,6 +539,7 @@ export default function Home() {
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const aiAbortRef = useRef<AbortController | null>(null);
 
   const tree = useMemo(() => buildTree(files), [files]);
   const appStyle = { "--sidebar-width": `${sidebarWidth}px` } as CSSProperties;
@@ -402,11 +550,32 @@ export default function Home() {
 
   const previewChange = previewChangeIndex === null ? null : pendingChanges[previewChangeIndex] || null;
   const previewContent =
-    previewChange && previewChange.action !== "delete"
-      ? previewChange.content || ""
+    previewChange
+      ? previewChange.action === "delete"
+        ? ""
+        : previewChange.content || ""
       : activeFile?.content || "";
 
   const editorPath = previewChange?.path || activeFile?.path || "";
+  const previewOriginalContent = useMemo(() => {
+    if (!previewChange) return activeFile?.content || "";
+
+    const path = cleanPath(previewChange.path);
+    const baselineFile = proposalBaseline?.find((file) => cleanPath(file.path) === path);
+    const currentFile = files.find((file) => cleanPath(file.path) === path);
+
+    return baselineFile?.content || currentFile?.content || "";
+  }, [activeFile, files, previewChange, proposalBaseline]);
+
+  const previewDiff = useMemo(() => {
+    if (!previewChange) return [];
+
+    const path = cleanPath(previewChange.path);
+    const before = previewOriginalContent;
+    const after = previewChange.action === "delete" ? "" : previewChange.content || "";
+
+    return compactDiffLines(buildLineDiff(before, after));
+  }, [previewChange, previewOriginalContent]);
 
   useEffect(() => {
     const saved = localStorage.getItem("home-codex-project");
@@ -720,17 +889,21 @@ export default function Home() {
   }
 
   async function askAi() {
+    if (loading) return;
     if (!message.trim()) return;
 
     const userMessage = message;
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
 
     setLoading(true);
     setPendingChanges([]);
     setPreviewChangeIndex(null);
+    setProposalBaseline(null);
     setChat((current) => [
       ...current,
-      { role: "user", text: userMessage },
-      { role: "system", text: `${selectedProvider} / ${getActiveModel()} is thinking...` }
+      createChatEntry("user", userMessage),
+      createChatEntry("system", `${selectedProvider} / ${getActiveModel()} is thinking...`, true)
     ]);
 
     try {
@@ -749,29 +922,28 @@ export default function Home() {
           selectedFolder,
           files,
           mode: "code-edit"
-        })
+        }),
+        signal: controller.signal
       });
 
       const data = await safeJson(res);
 
-      setChat((current) => current.filter((item) => !item.text.endsWith(" is thinking...")));
+      setChat((current) => current.filter((item) => !item.transient));
 
       if (!res.ok) {
         setChat((current) => [
           ...current,
-          {
-            role: "ai",
-            text: data.error || `Request failed with status ${res.status}.`
-          }
+          createChatEntry("ai", data.error || `Request failed with status ${res.status}.`)
         ]);
 
         setToast("Request failed");
         return;
       }
 
-      setChat((current) => [...current, { role: "ai", text: data.message || "Done." }]);
+      setChat((current) => [...current, createChatEntry("ai", data.message || "Done.")]);
 
       if (data.type === "edit" && data.changes?.length) {
+        setProposalBaseline(files.map((file) => ({ ...file })));
         setPendingChanges(data.changes);
         const firstPreviewIndex = data.changes.findIndex((change) => change.action !== "delete");
         setPreviewChangeIndex(firstPreviewIndex >= 0 ? firstPreviewIndex : null);
@@ -779,14 +951,27 @@ export default function Home() {
       } else {
         setToast("AI answered");
       }
-    } catch {
-      setChat((current) => current.filter((item) => !item.text.endsWith(" is thinking...")));
-      setChat((current) => [...current, { role: "ai", text: "Connection failed." }]);
-      setToast("Connection failed");
+    } catch (error) {
+      setChat((current) => current.filter((item) => !item.transient));
+
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setChat((current) => [...current, createChatEntry("system", "AI stopped.")]);
+        setToast("AI stopped");
+      } else {
+        setChat((current) => [...current, createChatEntry("ai", "Connection failed.")]);
+        setToast("Connection failed");
+      }
     } finally {
       setMessage("");
       setLoading(false);
+      if (aiAbortRef.current === controller) {
+        aiAbortRef.current = null;
+      }
     }
+  }
+
+  function stopAi() {
+    aiAbortRef.current?.abort();
   }
 
   function applyChanges() {
@@ -844,12 +1029,47 @@ export default function Home() {
 
     setPendingChanges([]);
     setPreviewChangeIndex(null);
+    setProposalBaseline(null);
     setToast("Changes applied successfully");
   }
 
   function discardChanges() {
+    const affectedPaths = new Set(pendingChanges.map((change) => cleanPath(change.path)));
+    const baselineMap = new Map((proposalBaseline || []).map((file) => [cleanPath(file.path), file]));
+
+    if (affectedPaths.size > 0 && proposalBaseline) {
+      setFiles((current) => {
+        const restored = current
+          .filter((file) => {
+            const path = cleanPath(file.path);
+            return !affectedPaths.has(path) || baselineMap.has(path);
+          })
+          .map((file) => {
+            const path = cleanPath(file.path);
+            const baselineFile = baselineMap.get(path);
+
+            if (!affectedPaths.has(path) || !baselineFile) return file;
+            return { ...file, content: baselineFile.content };
+          });
+
+        for (const path of affectedPaths) {
+          if (restored.some((file) => cleanPath(file.path) === path)) continue;
+
+          const baselineFile = baselineMap.get(path);
+          if (baselineFile) restored.push({ ...baselineFile });
+        }
+
+        return restored.sort((a, b) => a.path.localeCompare(b.path));
+      });
+
+      if (activePath && affectedPaths.has(cleanPath(activePath)) && !baselineMap.has(cleanPath(activePath))) {
+        setActivePath("");
+      }
+    }
+
     setPendingChanges([]);
     setPreviewChangeIndex(null);
+    setProposalBaseline(null);
     setToast("Changes discarded");
   }
 
@@ -1112,23 +1332,42 @@ export default function Home() {
             </div>
 
             <div className="monacoWrap">
-              <MonacoEditor
-                height="100%"
-                theme="vs-dark"
-                language={getLanguage(editorPath)}
-                value={previewContent}
-                onChange={(value) => updateActiveFile(value || "")}
-                options={{
-                  readOnly: Boolean(previewChange),
-                  minimap: { enabled: false },
-                  fontSize: 14,
-                  lineNumbers: "on",
-                  wordWrap: "on",
-                  scrollBeyondLastLine: false,
-                  automaticLayout: true,
-                  tabSize: 2
-                }}
-              />
+              {previewChange ? (
+                <MonacoDiffEditor
+                  height="100%"
+                  theme="vs-dark"
+                  language={getLanguage(editorPath)}
+                  original={previewOriginalContent}
+                  modified={previewContent}
+                  options={{
+                    readOnly: true,
+                    renderSideBySide: true,
+                    minimap: { enabled: false },
+                    fontSize: 14,
+                    lineNumbers: "on",
+                    wordWrap: "on",
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true
+                  }}
+                />
+              ) : (
+                <MonacoEditor
+                  height="100%"
+                  theme="vs-dark"
+                  language={getLanguage(editorPath)}
+                  value={previewContent}
+                  onChange={(value) => updateActiveFile(value || "")}
+                  options={{
+                    minimap: { enabled: false },
+                    fontSize: 14,
+                    lineNumbers: "on",
+                    wordWrap: "on",
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true,
+                    tabSize: 2
+                  }}
+                />
+              )}
             </div>
           </>
         ) : (
@@ -1231,7 +1470,14 @@ export default function Home() {
                         : "bubble ai"
                   }
                 >
-                  {item.text}
+                  <div className="bubbleMeta">
+                    <span>{item.role === "user" ? "You" : item.role === "system" ? "System" : "AI"}</span>
+                    <span className="bubbleStats">
+                      <span>{item.estimatedTokens.toLocaleString()} tokens</span>
+                      <time dateTime={item.createdAt}>{formatChatTime(item.createdAt)}</time>
+                    </span>
+                  </div>
+                  <div className="bubbleText">{item.text}</div>
                 </div>
               ))
             )}
@@ -1249,19 +1495,46 @@ export default function Home() {
               <div key={index} className="changeItem">
                 <span>{change.action}</span>
                 <code>{change.path}</code>
-                {change.action !== "delete" && (
-                  <button
-                    className="previewButton"
-                    onClick={() => {
-                      setPreviewChangeIndex(index);
-                      setActivePath(cleanPath(change.path));
-                    }}
-                  >
-                    Preview
-                  </button>
-                )}
+                <button
+                  className="previewButton"
+                  onClick={() => setPreviewChangeIndex(index)}
+                >
+                  Preview
+                </button>
               </div>
             ))}
+
+            {previewChange && (
+              <div className="diffPreview">
+                <div className="diffHeader">
+                  <span>{previewChange.action.toUpperCase()}</span>
+                  <code>{previewChange.path}</code>
+                </div>
+
+                <div className="diffLines">
+                  {previewDiff.map((line, index) => {
+                    if (line.type === "gap") {
+                      return (
+                        <div key={index} className="diffLine diffGap">
+                          ...
+                        </div>
+                      );
+                    }
+
+                    const marker = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
+                    const lineNumber = line.type === "add" ? line.newLine : line.oldLine;
+
+                    return (
+                      <div key={index} className={`diffLine ${line.type === "add" ? "diffAdd" : line.type === "remove" ? "diffRemove" : "diffContext"}`}>
+                        <span className="diffMarker">{marker}</span>
+                        <span className="diffNumber">{lineNumber || ""}</span>
+                        <code>{line.text || " "}</code>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <button className="applyButton" onClick={applyChanges}>Apply Changes</button>
           </div>
@@ -1275,8 +1548,11 @@ export default function Home() {
             placeholder="Ask AI to explain, refactor, fix bugs, or create files..."
           />
 
-          <button className="sendButton" onClick={askAi} disabled={loading}>
-            {loading ? "Thinking..." : "Send"}
+          <button
+            className={loading ? "sendButton stopButton" : "sendButton"}
+            onClick={loading ? stopAi : askAi}
+          >
+            {loading ? "Stop" : "Send"}
           </button>
         </div>
       </aside>

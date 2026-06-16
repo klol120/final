@@ -9,7 +9,8 @@ import {
 
 const MAX_SELECTED_FILES = 8;
 const MAX_FILE_CHARS = 18000;
-const MAX_TOTAL_FILE_CHARS = 65000;
+const MAX_ACTIVE_FILE_CHARS = 52000;
+const MAX_TOTAL_FILE_CHARS = 90000;
 const MAX_FILE_INDEX_ITEMS = 700;
 
 type ProjectFile = {
@@ -61,6 +62,24 @@ ${text.slice(-half)}`;
 function estimateLines(content: string) {
   if (!content) return 0;
   return content.split("\n").length;
+}
+
+function buildFileOutline(content: string) {
+  const lines = content.split("\n");
+  const outline: string[] = [];
+  const pattern =
+    /^\s*(export\s+)?(default\s+)?(async\s+)?(function|const|let|var|type|interface|class)\s+([A-Za-z0-9_$]+)?|^\s*([A-Za-z0-9_$]+)\s*[:=]\s*(async\s*)?\(?[^=]*\)?\s*=>/;
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith("//")) return;
+    if (pattern.test(line) || /<(button|input|select|textarea|form|nav|menu)\b/i.test(line)) {
+      outline.push(`${index + 1}: ${trimmed.slice(0, 180)}`);
+    }
+  });
+
+  return outline.slice(0, 160).join("\n");
 }
 
 function keywordScore(message: string, file: ProjectFile) {
@@ -237,6 +256,8 @@ Rules:
 - Choose at most ${MAX_SELECTED_FILES} files.
 - Prefer the active file when relevant.
 - Include files explicitly named by the user.
+- Include sibling component, style, utility, and config files when the requested change can affect a shared workflow or repeated UI pattern.
+- For UI changes involving menus, toolbars, buttons, forms, navigation, state, or handlers, include the file that defines the surrounding component and any shared styling file if present.
 - Include related config files only if needed.
 - Do not invent paths.
 `,
@@ -259,8 +280,9 @@ Rules:
   return localCandidates;
 }
 
-function buildSelectedFileContext(files: ProjectFile[], selectedPaths: string[]) {
+function buildSelectedFileContext(files: ProjectFile[], selectedPaths: string[], activePath?: string) {
   const map = new Map(files.map((file) => [file.path, file]));
+  const cleanActivePath = activePath ? cleanPath(activePath) : "";
   let total = 0;
   const chunks: string[] = [];
 
@@ -271,13 +293,19 @@ function buildSelectedFileContext(files: ProjectFile[], selectedPaths: string[])
     const remaining = MAX_TOTAL_FILE_CHARS - total;
     if (remaining <= 0) break;
 
-    const maxForThisFile = Math.min(MAX_FILE_CHARS, remaining);
+    const perFileLimit = file.path === cleanActivePath ? MAX_ACTIVE_FILE_CHARS : MAX_FILE_CHARS;
+    const maxForThisFile = Math.min(perFileLimit, remaining);
     const content = truncateMiddle(file.content, maxForThisFile);
     total += content.length;
+    const outline = buildFileOutline(file.content);
 
     chunks.push(`FILE: ${file.path}
 CHARS_ORIGINAL: ${file.content.length}
 LINES_ORIGINAL: ${estimateLines(file.content)}
+OUTLINE:
+${outline || "No outline generated."}
+
+CONTENT:
 \`\`\`
 ${content}
 \`\`\``);
@@ -331,7 +359,7 @@ export async function POST(req: NextRequest) {
       body.selectedFolder
     );
 
-    const selectedFileContext = buildSelectedFileContext(files, selectedPaths);
+    const selectedFileContext = buildSelectedFileContext(files, selectedPaths, body.activePath);
 
     const projectTree = files
       .filter((file) => !file.path.endsWith("/.keep"))
@@ -399,6 +427,14 @@ TOKEN SAVER MODE:
 - You were given only selected relevant files, not the whole project.
 - If you need a missing file, return an answer saying exactly which path you need.
 - Do not guess full contents of missing files.
+
+CONTEXT DISCIPLINE:
+- First understand the surrounding workflow, not only the exact lines named by the user.
+- Preserve existing behavior, imports, state, handlers, props, styles, accessibility attributes, and sibling UI unless the request explicitly asks to change them.
+- When editing a repeated group such as a menu, toolbar, list of buttons, form controls, tabs, cards, or navigation items, inspect the whole group and keep behavior consistent across siblings.
+- When changing shared logic, scan the selected file context for every caller or dependent state path included in the prompt and update all affected parts together.
+- If a file is truncated and the missing section is necessary to make a safe full-file update, return an answer requesting the needed file or context instead of producing a risky edit.
+- Prefer the smallest complete change that satisfies the request while leaving unrelated code intact.
 
 When the user asks for edits, fixes, refactors, features, or new files, return ONLY valid JSON:
 

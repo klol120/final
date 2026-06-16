@@ -667,6 +667,34 @@ textarea:focus {
   font-size: 14px;
 }
 
+.bubbleMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+  font-size: 11px;
+  font-weight: 850;
+  opacity: 0.72;
+  text-transform: uppercase;
+}
+
+.bubbleStats {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.bubbleMeta time {
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+
+.bubbleText {
+  white-space: pre-wrap;
+}
+
 .bubble.user {
   align-self: flex-end;
   background: var(--gold-soft);
@@ -769,6 +797,12 @@ textarea:focus {
 .sendButton:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.stopButton,
+.stopButton:hover {
+  background: linear-gradient(180deg, #ffc7bd, var(--danger));
+  color: #210a07;
 }
 
 .toast {
@@ -1259,4 +1293,110 @@ textarea:focus {
   .sendButton {
     min-height: 30px;
   }
+}
+
+/* AI proposal diff preview */
+.changesBox {
+  max-height: min(360px, 42vh);
+}
+
+.diffPreview {
+  margin-top: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: #07090b;
+}
+
+.diffHeader {
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.diffHeader span {
+  color: var(--gold-soft);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.diffHeader code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diffLines {
+  max-height: 190px;
+  overflow: auto;
+  padding: 6px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.diffLine {
+  display: grid;
+  grid-template-columns: 18px 38px minmax(0, 1fr);
+  gap: 6px;
+  padding: 1px 8px;
+  white-space: pre-wrap;
+}
+
+.diffMarker,
+.diffNumber {
+  color: var(--muted);
+  user-select: none;
+}
+
+.diffNumber {
+  text-align: right;
+}
+
+.diffLine code {
+  min-width: 0;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+
+.diffAdd {
+  background: rgba(91, 214, 137, 0.16);
+  color: #c8f7d6;
+}
+
+.diffAdd .diffMarker {
+  color: #5bd689;
+}
+
+.diffRemove {
+  background: rgba(245, 155, 143, 0.16);
+  color: #ffd0ca;
+}
+
+.diffRemove .diffMarker {
+  color: var(--danger);
+}
+
+.diffContext {
+  color: #b9c0c7;
+}
+
+.diffGap {
+  grid-template-columns: 1fr;
+  color: var(--muted);
+  text-align: center;
+}
+
+.sendButton.stopButton,
+.sendButton.stopButton:hover {
+  background: linear-gradient(180deg, #ffc7bd, var(--danger));
+  color: #210a07;
 }
