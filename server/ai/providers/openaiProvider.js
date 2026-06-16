@@ -25,7 +25,11 @@ export const OPENAI_MODELS = [
   "gpt-4o-mini"
 ];
 
-export async function callOpenAI({ model, instructions, input }) {
+function isAbortError(error) {
+  return error?.name === "AbortError" || error?.name === "APIUserAbortError";
+}
+
+export async function callOpenAI({ model, instructions, input, signal }) {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
@@ -39,7 +43,7 @@ export async function callOpenAI({ model, instructions, input }) {
       model,
       instructions,
       input
-    });
+    }, { signal });
 
     return {
       provider: OPENAI_PROVIDER,
@@ -48,6 +52,7 @@ export async function callOpenAI({ model, instructions, input }) {
       raw: response
     };
   } catch (error) {
+    if (isAbortError(error)) throw error;
     throw new Error(`OpenAI provider API failed: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
 }

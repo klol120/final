@@ -12,6 +12,8 @@ const MAX_FILE_CHARS = 18000;
 const MAX_ACTIVE_FILE_CHARS = 52000;
 const MAX_TOTAL_FILE_CHARS = 90000;
 const MAX_FILE_INDEX_ITEMS = 700;
+const MAX_HISTORY_MESSAGES = 10;
+const MAX_HISTORY_MESSAGE_CHARS = 1400;
 
 type ProjectFile = {
   path: string;
@@ -135,7 +137,10 @@ function getLocalCandidatePaths(files: ProjectFile[], message: string, activePat
 function getMessageText(body: RequestBody) {
   if (body.messages?.length) {
     return body.messages
+      .filter((item) => item.content?.trim())
+      .slice(-MAX_HISTORY_MESSAGES)
       .map((item) => `${item.role || "user"}: ${item.content || ""}`)
+      .map((item) => truncateMiddle(item, MAX_HISTORY_MESSAGE_CHARS))
       .join("\n\n")
       .trim();
   }
@@ -157,6 +162,13 @@ function safeRaw(raw: unknown) {
   } catch {
     return null;
   }
+}
+
+function isAbortError(error: unknown) {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || error.name === "APIUserAbortError")
+  );
 }
 
 function parseAiJson(text: string) {
@@ -204,7 +216,15 @@ function normalizeAiEditResponse(parsed: any) {
   };
 }
 
-async function pickRelevantFiles(provider: string, model: string, files: ProjectFile[], message: string, activePath?: string, selectedFolder?: string) {
+async function pickRelevantFiles(
+  provider: string,
+  model: string,
+  files: ProjectFile[],
+  message: string,
+  activePath?: string,
+  selectedFolder?: string,
+  signal?: AbortSignal
+) {
   const localCandidates = getLocalCandidatePaths(files, message, activePath, selectedFolder);
 
   const fileIndex = files
@@ -220,7 +240,7 @@ async function pickRelevantFiles(provider: string, model: string, files: Project
 USER REQUEST:
 ${message}
 
-ACTIVE FILE:
+ACTIVE EDITOR TAB:
 ${activePath || "none"}
 
 SELECTED FOLDER:
@@ -255,13 +275,15 @@ Return ONLY valid JSON:
 Rules:
 - Choose at most ${MAX_SELECTED_FILES} files.
 - Prefer the active file when relevant.
+- The active editor tab is only UI context. If the user explicitly names a different file, include that named file and do not assume the active tab is the edit target.
 - Include files explicitly named by the user.
 - Include sibling component, style, utility, and config files when the requested change can affect a shared workflow or repeated UI pattern.
 - For UI changes involving menus, toolbars, buttons, forms, navigation, state, or handlers, include the file that defines the surrounding component and any shared styling file if present.
 - Include related config files only if needed.
 - Do not invent paths.
 `,
-    input: pickerInput
+    input: pickerInput,
+    signal
   });
 
   try {
@@ -295,11 +317,13 @@ function buildSelectedFileContext(files: ProjectFile[], selectedPaths: string[],
 
     const perFileLimit = file.path === cleanActivePath ? MAX_ACTIVE_FILE_CHARS : MAX_FILE_CHARS;
     const maxForThisFile = Math.min(perFileLimit, remaining);
+    const isTruncated = file.content.length > maxForThisFile;
     const content = truncateMiddle(file.content, maxForThisFile);
     total += content.length;
     const outline = buildFileOutline(file.content);
 
     chunks.push(`FILE: ${file.path}
+CONTENT_STATUS: ${isTruncated ? "TRUNCATED" : "FULL"}
 CHARS_ORIGINAL: ${file.content.length}
 LINES_ORIGINAL: ${estimateLines(file.content)}
 OUTLINE:
@@ -356,7 +380,8 @@ export async function POST(req: NextRequest) {
       files,
       latestUserMessage,
       body.activePath,
-      body.selectedFolder
+      body.selectedFolder,
+      req.signal
     );
 
     const selectedFileContext = buildSelectedFileContext(files, selectedPaths, body.activePath);
@@ -380,10 +405,10 @@ ${mode}
 USER REQUEST:
 ${latestUserMessage}
 
-MESSAGES:
+RECENT CONVERSATION:
 ${messageText}
 
-ACTIVE FILE:
+ACTIVE EDITOR TAB:
 ${body.activePath || "none"}
 
 SELECTED FOLDER:
@@ -427,6 +452,9 @@ TOKEN SAVER MODE:
 - You were given only selected relevant files, not the whole project.
 - If you need a missing file, return an answer saying exactly which path you need.
 - Do not guess full contents of missing files.
+- The active editor tab is only UI context. If the user explicitly names another file in the request and that file content is present, treat the named file as the edit target.
+- A selected file is truncated only when its CONTENT block contains a "[TRUNCATED ...]" marker. If there is no truncation marker, the displayed CONTENT is the full file, even when it is short.
+- If a selected file has CONTENT_STATUS: FULL, do not ask the user to provide that file again. You already have its full content.
 
 CONTEXT DISCIPLINE:
 - First understand the surrounding workflow, not only the exact lines named by the user.
@@ -472,7 +500,8 @@ Rules:
 - Never wrap JSON in markdown.
 - Do not include \`\`\`json fences. The first character of your response must be { and the last character must be }.
 `,
-      input: finalInput
+      input: finalInput,
+      signal: req.signal
     });
 
     let parsed;
@@ -497,6 +526,15 @@ Rules:
       maxInputChars: Number(process.env.MAX_INPUT_CHARS || "120000")
     });
   } catch (error) {
+    if (isAbortError(error)) {
+      return NextResponse.json(
+        {
+          error: "Request aborted."
+        },
+        { status: 499 }
+      );
+    }
+
     console.error(error);
     const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 500;
     const message = error instanceof Error ? error.message : "Server error.";

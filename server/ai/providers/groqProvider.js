@@ -14,7 +14,11 @@ export const GROQ_MODELS = [
   "groq/compound-mini"
 ];
 
-export async function callGroq({ model, instructions, input }) {
+function isAbortError(error) {
+  return error?.name === "AbortError" || error?.name === "APIUserAbortError";
+}
+
+export async function callGroq({ model, instructions, input, signal }) {
   const apiKey = process.env.GROQ_API_KEY;
 
   if (!apiKey) {
@@ -30,11 +34,12 @@ export async function callGroq({ model, instructions, input }) {
   try {
     const response = await client.chat.completions.create({
       model,
+      temperature: 0,
       messages: [
         { role: "system", content: instructions },
         { role: "user", content: input }
       ]
-    });
+    }, { signal });
 
     return {
       provider: GROQ_PROVIDER,
@@ -43,6 +48,7 @@ export async function callGroq({ model, instructions, input }) {
       raw: response
     };
   } catch (error) {
+    if (isAbortError(error)) throw error;
     throw new Error(`Groq provider API failed: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
 }

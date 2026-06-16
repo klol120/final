@@ -12,7 +12,11 @@ export const GEMINI_MODELS = [
   "gemini-2.5-flash-lite"
 ];
 
-export async function callGemini({ model, instructions, input }) {
+function isAbortError(error) {
+  return error?.name === "AbortError" || error?.name === "APIUserAbortError";
+}
+
+export async function callGemini({ model, instructions, input, signal }) {
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
@@ -26,7 +30,8 @@ export async function callGemini({ model, instructions, input }) {
       model,
       contents: input,
       config: {
-        systemInstruction: instructions
+        systemInstruction: instructions,
+        abortSignal: signal
       }
     });
 
@@ -37,6 +42,7 @@ export async function callGemini({ model, instructions, input }) {
       raw: response
     };
   } catch (error) {
+    if (isAbortError(error)) throw error;
     throw new Error(`Gemini provider API failed: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
 }

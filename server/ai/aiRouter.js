@@ -117,20 +117,20 @@ export function validateProviderModel(provider, model) {
   }
 }
 
-export async function callAi({ provider, model, instructions, input }) {
+export async function callAi({ provider, model, instructions, input, signal }) {
   validateProviderModel(provider, model);
   assertInputWithinLimit(input);
 
   if (provider === OPENAI_PROVIDER) {
-    return callOpenAI({ model, instructions, input });
+    return callOpenAI({ model, instructions, input, signal });
   }
 
   if (provider === GEMINI_PROVIDER) {
-    return callGemini({ model, instructions, input });
+    return callGemini({ model, instructions, input, signal });
   }
 
   if (provider === GROQ_PROVIDER) {
-    return callGroq({ model, instructions, input });
+    return callGroq({ model, instructions, input, signal });
   }
 
   const error = new Error(`Invalid provider "${provider}".`);

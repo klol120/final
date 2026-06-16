@@ -306,6 +306,51 @@ textarea:focus {
   overflow: auto;
 }
 
+.fileSearchBox {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  padding-bottom: 8px;
+  background: #0b0d10;
+}
+
+.fileSearchBox input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-deep);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.fileSearchBox button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text-soft);
+  font-weight: 900;
+}
+
+.fileSearchBox button:hover {
+  border-color: var(--border-strong);
+  color: var(--danger);
+}
+
+.emptySearch {
+  padding: 14px 10px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
 .treeItem {
   position: relative;
   width: 100%;
@@ -438,6 +483,7 @@ textarea:focus {
   flex: 0 0 56px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   padding: 0 20px;
   border-bottom: 1px solid var(--border-soft);
@@ -449,6 +495,83 @@ textarea:focus {
   min-width: 0;
 }
 
+.proposalBar {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(159, 240, 198, 0.32);
+  background:
+    linear-gradient(90deg, rgba(159, 240, 198, 0.14), rgba(216, 183, 106, 0.08)),
+    #0d1713;
+}
+
+.proposalBar strong {
+  display: block;
+  color: var(--mint);
+  font-size: 14px;
+}
+
+.proposalBar span {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.proposalActions,
+.editorToolbar,
+.changesHeaderActions,
+.changeActions,
+.emptyActions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.proposalActions button,
+.editorToolbar button,
+.emptyActions button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #111820;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.proposalActions button:hover,
+.editorToolbar button:hover,
+.emptyActions button:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.proposalActions .proposalApply {
+  border-color: rgba(159, 240, 198, 0.45);
+  background: rgba(159, 240, 198, 0.14);
+  color: var(--mint);
+}
+
+.proposalActions .proposalDiscard {
+  border-color: rgba(245, 155, 143, 0.4);
+  background: rgba(245, 155, 143, 0.1);
+  color: var(--danger);
+}
+
+.editorTitle {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.editorToolbar {
+  flex: 0 0 auto;
+}
+
 .previewHeader {
   background:
     linear-gradient(180deg, rgba(216, 183, 106, 0.14), transparent),
@@ -457,7 +580,7 @@ textarea:focus {
   color: var(--gold-soft);
 }
 
-.editorHeader span:last-child {
+.editorTitle span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -470,12 +593,71 @@ textarea:focus {
   overflow: hidden;
 }
 
+.diffEditorShell {
+  height: 100%;
+  display: grid;
+  grid-template-rows: 30px minmax(0, 1fr);
+}
+
+.diffPaneLabels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--border-soft);
+  background: #0b0e11;
+}
+
+.diffPaneLabels span {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.diffPaneLabels span + span {
+  border-left: 1px solid var(--border-soft);
+  color: var(--mint);
+}
+
+.editorStatusBar {
+  min-height: 28px;
+  flex: 0 0 28px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border-soft);
+  background: #090b0d;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.editorStatusBar span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editorStatusBar span:first-child {
+  flex: 1 1 auto;
+  color: var(--text-soft);
+}
+
 .emptyEditor {
   height: 100%;
   display: grid;
   place-items: center;
   color: var(--muted);
   text-align: center;
+}
+
+.emptyActions {
+  justify-content: center;
+  margin-top: 18px;
 }
 
 .emptyEditor h2 {
@@ -601,6 +783,39 @@ textarea:focus {
   min-width: 0;
   display: grid;
   gap: 5px;
+}
+
+.presetBox {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.presetButton {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #080a0c;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.presetButton:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.presetButton.activePreset {
+  border-color: rgba(216, 183, 106, 0.58);
+  background: rgba(216, 183, 106, 0.12);
+  color: var(--gold-soft);
 }
 
 .modelBox label {
@@ -1399,4 +1614,368 @@ textarea:focus {
 .sendButton.stopButton:hover {
   background: linear-gradient(180deg, #ffc7bd, var(--danger));
   color: #210a07;
+}
+
+.usagePanel {
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: #10151a;
+}
+
+.compactTitle {
+  height: 30px;
+}
+
+.usageGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--border-soft);
+}
+
+.usageGrid div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  background: #080a0c;
+}
+
+.usageGrid span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.usageGrid strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileSearchBox {
+  background: #0b0d10;
+}
+
+.modelBox .presetBox {
+  grid-column: 1 / -1;
+}
+
+.presetButton {
+  letter-spacing: 0;
+}
+
+.chatPanel {
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+}
+
+.rightTabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: #07090b;
+}
+
+.rightTabs button {
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.rightTabs button:hover {
+  border-color: var(--border-soft);
+  background: #10151a;
+  color: var(--text);
+}
+
+.rightTabs .activeTab {
+  border-color: rgba(216, 183, 106, 0.45);
+  background: rgba(216, 183, 106, 0.12);
+  color: var(--gold-soft);
+}
+
+.changesPanel,
+.usagePanelFull,
+.conversation {
+  min-height: 0;
+}
+
+.changesPanel {
+  flex: 1 1 auto;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.emptyChangesPanel {
+  display: grid;
+  align-content: start;
+}
+
+.changesHeader {
+  gap: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: 8px;
+  background: #0d1713;
+}
+
+.changesHeaderActions {
+  margin-left: auto;
+}
+
+.changesHeaderActions button,
+.changeActions button {
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #111820;
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.changeItem {
+  grid-template-columns: 62px minmax(0, 1fr);
+}
+
+.changeActions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+
+.activeChangeItem {
+  border-color: rgba(159, 240, 198, 0.45);
+  background: rgba(159, 240, 198, 0.08);
+}
+
+.applyMini {
+  border-color: rgba(159, 240, 198, 0.4) !important;
+  color: var(--mint) !important;
+}
+
+.dangerMini {
+  border-color: rgba(245, 155, 143, 0.38) !important;
+  color: var(--danger) !important;
+}
+
+.usedFiles {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.usedFiles summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.usedFiles div {
+  display: grid;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.usedFiles code {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  padding: 5px 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.24);
+  color: var(--text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usagePanelFull {
+  max-height: none;
+}
+
+.usagePanelFull .usageGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-height: 760px) {
+  .rightTabs button {
+    min-height: 28px;
+  }
+
+  .proposalBar {
+    min-height: 42px;
+  }
+
+  .editorStatusBar {
+    min-height: 24px;
+  }
+}
+
+/* Sidebar proportion pass */
+.sidebar {
+  padding: 14px 12px;
+}
+
+.sidebarTop {
+  padding-bottom: 12px;
+}
+
+.projectTitle {
+  margin-top: 4px;
+  font-size: 19px;
+  line-height: 1.15;
+}
+
+.toolbar {
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.toolbar button {
+  min-height: 36px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.selectedFolderBox {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+}
+
+.selectedFolderBox span {
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.selectedFolderBox strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.treeRoot {
+  gap: 4px;
+  padding-top: 0;
+}
+
+.treeActionBar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  padding-bottom: 7px;
+  background: #0b0d10;
+}
+
+.treeActionBar button {
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #111820;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.treeActionBar button:hover {
+  border-color: rgba(216, 183, 106, 0.42);
+  color: var(--gold-soft);
+}
+
+.fileSearchBox {
+  top: 39px;
+  padding-bottom: 7px;
+}
+
+.fileSearchBox input,
+.fileSearchBox button {
+  height: 32px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.treeSectionTitle {
+  margin: 5px 0 6px;
+  font-size: 10px;
+}
+
+.treeItem {
+  min-height: 32px;
+  gap: 8px;
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.folderEmoji,
+.fileIcon {
+  width: 30px;
+  height: 22px;
+  font-size: 10px;
+}
+
+.folderIcon {
+  width: 10px;
+  flex-basis: 10px;
+}
+
+.treeBranch {
+  margin-left: 9px;
+  padding-left: 8px;
+}
+
+.deleteIcon {
+  padding: 2px 7px;
+  font-size: 12px;
+}
+
+.draftTreeItem {
+  border-color: rgba(159, 240, 198, 0.42);
+  background: rgba(159, 240, 198, 0.08);
+}
+
+.draftTreeItem input {
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 24px;
+  border: 1px solid rgba(159, 240, 198, 0.35);
+  border-radius: 6px;
+  background: #07100c;
+  color: var(--text);
+  padding: 0 8px;
+  font-size: 13px;
 }
