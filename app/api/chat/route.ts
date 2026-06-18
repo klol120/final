@@ -3,17 +3,20 @@ import {
   assertInputWithinLimit,
   callAi,
   getDefaultProvider,
+  getMaxInputChars,
   resolveProviderAndModel,
   validateProviderModel
 } from "../../../server/ai/aiRouter.js";
 
-const MAX_SELECTED_FILES = 8;
-const MAX_FILE_CHARS = 18000;
-const MAX_ACTIVE_FILE_CHARS = 52000;
-const MAX_TOTAL_FILE_CHARS = 90000;
+const MAX_SELECTED_FILES = 14;
+const MAX_SMALL_PROJECT_FILES = 14;
+const MAX_FILE_CHARS = 22000;
+const MAX_ACTIVE_FILE_CHARS = 64000;
+const MAX_TOTAL_FILE_CHARS = 98000;
 const MAX_FILE_INDEX_ITEMS = 700;
 const MAX_HISTORY_MESSAGES = 10;
 const MAX_HISTORY_MESSAGE_CHARS = 1400;
+const MAX_REPAIR_RESPONSE_CHARS = 12000;
 
 type ProjectFile = {
   path: string;
@@ -35,6 +38,7 @@ type RequestBody = {
   selectedFolder?: string;
   files: ProjectFile[];
   mode?: "chat" | "code-edit";
+  proceedLargeRequest?: boolean;
 };
 
 type PickFilesResponse = {
@@ -44,6 +48,55 @@ type PickFilesResponse = {
 
 function cleanPath(path: string) {
   return path.replaceAll("\\", "/").replace(/^\/+/, "").replace(/\/+/g, "/");
+}
+
+function uniqueExistingPaths(files: ProjectFile[], pathGroups: string[][]) {
+  const validPaths = new Set(files.filter((file) => !file.path.endsWith("/.keep")).map((file) => file.path));
+  const result: string[] = [];
+
+  for (const group of pathGroups) {
+    for (const rawPath of group) {
+      const path = cleanPath(rawPath);
+
+      if (!validPaths.has(path) || result.includes(path)) continue;
+      result.push(path);
+
+      if (result.length >= MAX_SELECTED_FILES) return result;
+    }
+  }
+
+  return result;
+}
+
+function getExplicitPathMentions(files: ProjectFile[], message: string) {
+  const lowerMessage = cleanPath(message).toLowerCase();
+  const result: string[] = [];
+
+  for (const file of files) {
+    if (file.path.endsWith("/.keep")) continue;
+
+    const lowerPath = file.path.toLowerCase();
+    const name = lowerPath.split("/").pop() || lowerPath;
+    const pathMentioned = lowerMessage.includes(lowerPath);
+    const nameMentioned = name.includes(".") && name.length >= 5 && lowerMessage.includes(name);
+
+    if (pathMentioned || nameMentioned) {
+      result.push(file.path);
+    }
+  }
+
+  return result;
+}
+
+function getWholeProjectPathsIfSmall(files: ProjectFile[]) {
+  const realFiles = files.filter((file) => !file.path.endsWith("/.keep"));
+  const totalChars = realFiles.reduce((sum, file) => sum + file.content.length, 0);
+
+  if (realFiles.length <= MAX_SMALL_PROJECT_FILES && totalChars <= MAX_TOTAL_FILE_CHARS) {
+    return realFiles.map((file) => file.path);
+  }
+
+  return [];
 }
 
 function estimateTokens(text: string) {
@@ -216,6 +269,170 @@ function normalizeAiEditResponse(parsed: any) {
   };
 }
 
+function isLikelyEditRequest(message: string, mode: RequestBody["mode"]) {
+  if (mode === "chat") return false;
+
+  return /\b(fix|edit|change|refactor|create|add|remove|delete|update|implement|make|build|improve|modify|replace|rename|move|style|design|bug|error|issue|feature|generate|write|apply)\b/i.test(message);
+}
+
+function responseLooksLikeCodeInsteadOfJson(text: string) {
+  const trimmed = text.trim();
+
+  if (!trimmed || trimmed.startsWith("{")) return false;
+
+  const codeSignals = [
+    /^```/m,
+    /^\s*(import|export|const|let|var|function|class|type|interface)\s/m,
+    /<\/?[A-Za-z][^>]*>/,
+    /^\s*[\w.-]+\.(tsx|ts|jsx|js|css|json|html|py|java|go|rs|php|rb):/m
+  ];
+
+  return codeSignals.some((pattern) => pattern.test(trimmed));
+}
+
+function contentHasPartialPlaceholder(content: string) {
+  const trimmed = content.trim();
+
+  if (/^```/.test(trimmed)) return true;
+
+  return [
+    /keep (the )?(rest|remaining)/i,
+    /(rest|remaining).{0,40}(unchanged|same)/i,
+    /(unchanged|existing|previous) code/i,
+    /same as (before|above|original)/i,
+    /not shown/i,
+    /omitted for brevity/i,
+    /\bsnipped\b/i,
+    /\.\.\..{0,40}(rest|remaining|unchanged)/i
+  ].some((pattern) => pattern.test(content));
+}
+
+function editResponseRepairReason(parsed: any, rawText: string, parseFailed: boolean, files: ProjectFile[], selectedPaths: string[], editIntent: boolean) {
+  if (!editIntent) return "";
+
+  if (parseFailed) {
+    return responseLooksLikeCodeInsteadOfJson(rawText)
+      ? "The previous response wrote code in chat instead of returning JSON file edits."
+      : "The previous response was not valid JSON.";
+  }
+
+  if (parsed?.type !== "edit") {
+    const message = String(parsed?.message || rawText || "");
+    const lowerMessage = message.toLowerCase();
+    const asksForAvailableFile =
+      /\b(need|provide|send|upload|missing|cannot access|can't access|do not have|don't have)\b/i.test(message) &&
+      /\b(file|path|content|context)\b/i.test(message);
+    const mentionsSelectedFile = selectedPaths.some((path) => {
+      const lowerPath = path.toLowerCase();
+      const name = lowerPath.split("/").pop() || lowerPath;
+      return lowerMessage.includes(lowerPath) || lowerMessage.includes(name);
+    });
+
+    if (asksForAvailableFile || mentionsSelectedFile) {
+      return "The previous response asked for file context that is already available in the selected file content.";
+    }
+
+    return "The user asked for a code change, but the previous response answered in chat instead of returning file edits.";
+  }
+
+  const existingFiles = new Map(files.map((file) => [cleanPath(file.path), file]));
+  const changes = Array.isArray(parsed.changes) ? parsed.changes : [];
+
+  if (changes.length === 0) {
+    return "The previous edit response did not include any file changes.";
+  }
+
+  for (const change of changes) {
+    if ((change.action === "update" || change.action === "create") && contentHasPartialPlaceholder(String(change.content || ""))) {
+      return `The previous ${change.action} for ${change.path} used a placeholder instead of full final file content.`;
+    }
+
+    if (change.action === "update") {
+      const existing = existingFiles.get(cleanPath(change.path));
+      const nextContent = String(change.content || "");
+
+      if (existing && existing.content.length > 1200 && nextContent.length < 120 && nextContent.length < existing.content.length / 8) {
+        return `The previous update for ${change.path} looks like a fragment, not full final file content.`;
+      }
+    }
+  }
+
+  return "";
+}
+
+function buildCodingInstructions(repairReason = "") {
+  return `
+You are a coding agent inside a web IDE.
+
+${repairReason ? `REPAIR MODE:
+- The previous response could not be safely applied: ${repairReason}
+- Return a corrected response now.
+- Do not apologize, explain, or chat. Return only the required JSON object.
+` : ""}
+QUALITY MODE:
+- Take the time needed to understand the task and all selected context before answering.
+- Prioritize a correct, complete edit over a short or fast-looking answer.
+- Make every necessary file change that follows from the user's request and the selected context.
+
+CONTEXT RULES:
+- You were given selected relevant files and a project tree.
+- If a selected file has CONTENT_STATUS: FULL, do not ask the user to provide that file again. You already have its full content.
+- A selected file is truncated only when its CONTENT block contains a "[TRUNCATED ...]" marker. If there is no truncation marker, the displayed CONTENT is the full file.
+- Only ask for a missing file when the exact file content is not selected, the file is necessary, and the project tree/context is insufficient for a safe edit.
+- The active editor tab is only UI context. If the user explicitly names another file in the request and that file content is present, treat the named file as the edit target.
+
+EDIT DISCIPLINE:
+- First understand the surrounding workflow, not only the exact lines named by the user.
+- Preserve existing behavior, imports, state, handlers, props, styles, accessibility attributes, and sibling UI unless the request explicitly asks to change them.
+- When editing a repeated group such as a menu, toolbar, list of buttons, form controls, tabs, cards, or navigation items, inspect the whole group and keep behavior consistent across siblings.
+- When changing shared logic, scan the selected file context for every caller or dependent state path included in the prompt and update all affected parts together.
+- If a file is truncated and the missing section is necessary to make a safe full-file update, return an answer requesting the needed file or context instead of producing a risky edit.
+- Prefer the smallest complete change that satisfies the request while leaving unrelated code intact.
+
+FULL-FILE OUTPUT RULES:
+- For update/create, return full final file content.
+- To keep unchanged code, copy it verbatim from the original file into the returned content.
+- Never write placeholders such as "keep the rest unchanged", "existing code", "...", "omitted", or partial diffs inside file content.
+- The returned content replaces the whole file literally.
+
+When the user asks for edits, fixes, refactors, features, or new files, return ONLY valid JSON:
+
+{
+  "type": "edit",
+  "message": "short confirmation",
+  "changes": [
+    {
+      "action": "update",
+      "path": "file path",
+      "content": "full new file content"
+    },
+    {
+      "action": "create",
+      "path": "new file path",
+      "content": "full new file content"
+    },
+    {
+      "action": "delete",
+      "path": "file path"
+    }
+  ]
+}
+
+When no edit is needed, return ONLY valid JSON:
+
+{
+  "type": "answer",
+  "message": "your answer"
+}
+
+Rules:
+- Never return code in normal chat for an edit request.
+- Never return partial diffs.
+- Never wrap JSON in markdown.
+- Do not include \`\`\`json fences. The first character of your response must be { and the last character must be }.
+`;
+}
+
 async function pickRelevantFiles(
   provider: string,
   model: string,
@@ -225,7 +442,15 @@ async function pickRelevantFiles(
   selectedFolder?: string,
   signal?: AbortSignal
 ) {
-  const localCandidates = getLocalCandidatePaths(files, message, activePath, selectedFolder);
+  const wholeProjectPaths = getWholeProjectPathsIfSmall(files);
+
+  if (wholeProjectPaths.length > 0) {
+    return wholeProjectPaths;
+  }
+
+  const explicitPaths = getExplicitPathMentions(files, message);
+  const localCandidatePaths = getLocalCandidatePaths(files, message, activePath, selectedFolder);
+  const localCandidates = uniqueExistingPaths(files, [explicitPaths, localCandidatePaths]);
 
   const fileIndex = files
     .filter((file) => !file.path.endsWith("/.keep"))
@@ -256,7 +481,7 @@ ${JSON.stringify(fileIndex, null, 2)}
   try {
     assertInputWithinLimit(pickerInput, "file picker input");
   } catch {
-    return localCandidates.slice(0, 3);
+    return localCandidates.slice(0, Math.max(5, explicitPaths.length));
   }
 
   const response = await callAi({
@@ -295,7 +520,9 @@ Rules:
       .filter((path) => validPaths.has(path))
       .slice(0, MAX_SELECTED_FILES);
 
-    if (picked.length > 0) return picked;
+    if (picked.length > 0) {
+      return uniqueExistingPaths(files, [explicitPaths, picked, localCandidatePaths]);
+    }
   } catch {
   }
 
@@ -425,94 +652,102 @@ ${selectedFileContext || "No selected file contents. This may be a create-only o
 `;
 
     const finalInputTokens = estimateTokens(finalInput);
+    const maxInputChars = getMaxInputChars();
+    const allowLargeInput = Boolean(body.proceedLargeRequest);
 
-    try {
-      assertInputWithinLimit(finalInput, "final AI input");
-    } catch (error) {
-      return NextResponse.json(
-        {
-          type: "answer",
-          error: error instanceof Error ? error.message : "Input too large.",
-          message: error instanceof Error ? error.message : "Input too large.",
-          usedFiles: selectedPaths,
-          estimatedTokens: finalInputTokens,
-          maxInputChars: Number(process.env.MAX_INPUT_CHARS || "120000")
-        },
-        { status: 413 }
-      );
+    if (!allowLargeInput) {
+      try {
+        assertInputWithinLimit(finalInput, "final AI input");
+      } catch (error) {
+        const inputChars = finalInput.length;
+
+        return NextResponse.json(
+          {
+            type: "answer",
+            requiresConfirmation: true,
+            inputChars,
+            error: error instanceof Error ? error.message : "Input too large.",
+            message: `This request is ${inputChars.toLocaleString()} characters. Would you like to proceed?`,
+            usedFiles: selectedPaths,
+            estimatedTokens: finalInputTokens,
+            maxInputChars
+          },
+          { status: 413 }
+        );
+      }
     }
 
-    const response = await callAi({
+    let response = await callAi({
       provider: requested.provider,
       model: requested.model,
-      instructions: `
-You are a coding agent inside a web IDE.
-
-TOKEN SAVER MODE:
-- You were given only selected relevant files, not the whole project.
-- If you need a missing file, return an answer saying exactly which path you need.
-- Do not guess full contents of missing files.
-- The active editor tab is only UI context. If the user explicitly names another file in the request and that file content is present, treat the named file as the edit target.
-- A selected file is truncated only when its CONTENT block contains a "[TRUNCATED ...]" marker. If there is no truncation marker, the displayed CONTENT is the full file, even when it is short.
-- If a selected file has CONTENT_STATUS: FULL, do not ask the user to provide that file again. You already have its full content.
-
-CONTEXT DISCIPLINE:
-- First understand the surrounding workflow, not only the exact lines named by the user.
-- Preserve existing behavior, imports, state, handlers, props, styles, accessibility attributes, and sibling UI unless the request explicitly asks to change them.
-- When editing a repeated group such as a menu, toolbar, list of buttons, form controls, tabs, cards, or navigation items, inspect the whole group and keep behavior consistent across siblings.
-- When changing shared logic, scan the selected file context for every caller or dependent state path included in the prompt and update all affected parts together.
-- If a file is truncated and the missing section is necessary to make a safe full-file update, return an answer requesting the needed file or context instead of producing a risky edit.
-- Prefer the smallest complete change that satisfies the request while leaving unrelated code intact.
-
-When the user asks for edits, fixes, refactors, features, or new files, return ONLY valid JSON:
-
-{
-  "type": "edit",
-  "message": "short confirmation",
-  "changes": [
-    {
-      "action": "update",
-      "path": "file path",
-      "content": "full new file content"
-    },
-    {
-      "action": "create",
-      "path": "new file path",
-      "content": "full new file content"
-    },
-    {
-      "action": "delete",
-      "path": "file path"
-    }
-  ]
-}
-
-When no edit is needed, return ONLY valid JSON:
-
-{
-  "type": "answer",
-  "message": "your answer"
-}
-
-Rules:
-- For update/create, return full final file content.
-- Never return partial diffs.
-- Never wrap JSON in markdown.
-- Do not include \`\`\`json fences. The first character of your response must be { and the last character must be }.
-`,
+      instructions: buildCodingInstructions(),
       input: finalInput,
-      signal: req.signal
+      signal: req.signal,
+      allowLargeInput
     });
 
     let parsed;
+    let parseFailed = false;
 
     try {
       parsed = normalizeAiEditResponse(parseAiJson(response.text));
     } catch {
+      parseFailed = true;
       parsed = {
         type: "answer",
         message: response.text
       };
+    }
+
+    const editIntent = isLikelyEditRequest(latestUserMessage, mode);
+    const repairReason = editResponseRepairReason(parsed, response.text, parseFailed, files, selectedPaths, editIntent);
+
+    if (repairReason) {
+      const previousResponse = truncateMiddle(response.text, MAX_REPAIR_RESPONSE_CHARS);
+      const repairInputWithResponse = `${finalInput}
+
+PREVIOUS RESPONSE PROBLEM:
+${repairReason}
+
+PREVIOUS INVALID RESPONSE:
+\`\`\`
+${previousResponse}
+\`\`\`
+`;
+      const repairInput =
+        allowLargeInput || repairInputWithResponse.length <= maxInputChars
+          ? repairInputWithResponse
+          : finalInput;
+
+      response = await callAi({
+        provider: requested.provider,
+        model: requested.model,
+        instructions: buildCodingInstructions(repairReason),
+        input: repairInput,
+        signal: req.signal,
+        allowLargeInput
+      });
+
+      parseFailed = false;
+
+      try {
+        parsed = normalizeAiEditResponse(parseAiJson(response.text));
+      } catch {
+        parseFailed = true;
+        parsed = {
+          type: "answer",
+          message: response.text
+        };
+      }
+
+      const secondRepairReason = editResponseRepairReason(parsed, response.text, parseFailed, files, selectedPaths, editIntent);
+
+      if (secondRepairReason) {
+        parsed = {
+          type: "answer",
+          message: `The AI did not produce safe file edits: ${secondRepairReason}`
+        };
+      }
     }
 
     return NextResponse.json({
@@ -523,7 +758,7 @@ Rules:
       raw: safeRaw(response.raw),
       usedFiles: selectedPaths,
       estimatedTokens: finalInputTokens,
-      maxInputChars: Number(process.env.MAX_INPUT_CHARS || "120000")
+      maxInputChars
     });
   } catch (error) {
     if (isAbortError(error)) {

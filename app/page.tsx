@@ -29,6 +29,9 @@ type AiResponse = {
   text?: string;
   estimatedTokens?: number;
   usedFiles?: string[];
+  requiresConfirmation?: boolean;
+  inputChars?: number;
+  maxInputChars?: number;
 };
 
 type ChatEntry = {
@@ -183,6 +186,7 @@ const SIDEBAR_DEFAULT_WIDTH = 320;
 const MAX_HISTORY_MESSAGES = 8;
 const MAX_HISTORY_MESSAGE_CHARS = 1200;
 const MAX_HISTORY_TOKENS = 1800;
+const LARGE_REQUEST_CONFIRM_CHARS = 120000;
 
 const MODEL_PRICING_PER_MILLION: Record<string, { input: number; output: number }> = {
   "openai:gpt-5.5": { input: 5, output: 30 },
@@ -243,6 +247,10 @@ function formatUsd(value: number | null) {
   if (value === 0) return "$0.0000";
 
   return value < 0.0001 ? "<$0.0001" : `$${value.toFixed(4)}`;
+}
+
+function formatCharacterCount(value: number) {
+  return value.toLocaleString();
 }
 
 function formatChatTime(value: string) {
@@ -686,6 +694,7 @@ export default function Home() {
   const [previewChangeIndex, setPreviewChangeIndex] = useState<number | null>(null);
   const [proposalBaseline, setProposalBaseline] = useState<ProjectFile[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [thinkingElapsedSeconds, setThinkingElapsedSeconds] = useState(0);
   const [draggingExternal, setDraggingExternal] = useState(false);
   const [draggedPath, setDraggedPath] = useState("");
   const [dropFolder, setDropFolder] = useState("");
@@ -816,6 +825,20 @@ export default function Home() {
     const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!loading) {
+      setThinkingElapsedSeconds(0);
+      return;
+    }
+
+    setThinkingElapsedSeconds(0);
+    const timer = window.setInterval(() => {
+      setThinkingElapsedSeconds((current) => current + 1);
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [loading]);
 
   useEffect(() => {
     if (!isResizingSidebar) return;
@@ -1142,6 +1165,34 @@ export default function Home() {
 
     const userMessage = message;
     const compactHistory = buildCompactHistory(chat, userMessage);
+    const payload = {
+      password,
+      provider: selectedProvider,
+      model: getActiveModel(),
+      messages: compactHistory,
+      message: userMessage,
+      activePath,
+      selectedFolder,
+      files,
+      mode: "code-edit",
+      proceedLargeRequest: false
+    };
+    let requestBody = JSON.stringify(payload);
+
+    if (requestBody.length > LARGE_REQUEST_CONFIRM_CHARS) {
+      const shouldProceed = window.confirm(
+        `This request is ${formatCharacterCount(requestBody.length)} characters. Would you like to proceed?`
+      );
+
+      if (!shouldProceed) {
+        setToast("Large request cancelled");
+        return;
+      }
+
+      payload.proceedLargeRequest = true;
+      requestBody = JSON.stringify(payload);
+    }
+
     const controller = new AbortController();
     aiAbortRef.current = controller;
 
@@ -1152,30 +1203,49 @@ export default function Home() {
     setChat((current) => [
       ...current,
       createChatEntry("user", userMessage),
-      createChatEntry("system", `${selectedProvider} / ${getActiveModel()} is thinking...`, true)
+      createChatEntry("system", `${selectedProvider} / ${getActiveModel()} is thinking`, true)
     ]);
 
     try {
-      const res = await fetch("/api/chat", {
+      let res = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          password,
-          provider: selectedProvider,
-          model: getActiveModel(),
-          messages: compactHistory,
-          message: userMessage,
-          activePath,
-          selectedFolder,
-          files,
-          mode: "code-edit"
-        }),
+        body: requestBody,
         signal: controller.signal
       });
 
-      const data = await safeJson(res);
+      let data = await safeJson(res);
+
+      if (res.status === 413 && data.requiresConfirmation) {
+        const inputChars = data.inputChars || requestBody.length;
+        const shouldProceed = window.confirm(
+          `This request is ${formatCharacterCount(inputChars)} characters. Would you like to proceed?`
+        );
+
+        if (!shouldProceed) {
+          setChat((current) => [
+            ...current.filter((item) => !item.transient),
+            createChatEntry("system", "Large request cancelled.")
+          ]);
+          setToast("Large request cancelled");
+          return;
+        }
+
+        payload.proceedLargeRequest = true;
+        requestBody = JSON.stringify(payload);
+        res = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: requestBody,
+          signal: controller.signal
+        });
+        data = await safeJson(res);
+      }
+
       const responseProvider = data.provider || selectedProvider;
       const responseModel = data.model || getActiveModel();
       const inputTokens = Math.max(0, Math.round(data.estimatedTokens || 0));
@@ -1905,37 +1975,44 @@ export default function Home() {
                   <span>Ask for a file, a refactor, a bug fix, or an explanation.</span>
                 </div>
               ) : (
-                chat.map((item, index) => (
-                  <div
-                    key={index}
-                    className={
-                      item.role === "user"
-                        ? "bubble user"
-                        : item.role === "system"
-                          ? "bubble system"
-                          : "bubble ai"
-                    }
-                  >
-                    <div className="bubbleMeta">
-                      <span>{item.role === "user" ? "You" : item.role === "system" ? "System" : "AI"}</span>
-                      <span className="bubbleStats">
-                        <span>{item.estimatedTokens.toLocaleString()} tokens</span>
-                        <time dateTime={item.createdAt}>{formatChatTime(item.createdAt)}</time>
-                      </span>
+                chat.map((item, index) => {
+                  const displayText =
+                    item.transient && loading
+                      ? `${item.text} (thinking for ${thinkingElapsedSeconds} seconds)`
+                      : item.text;
+
+                  return (
+                    <div
+                      key={index}
+                      className={
+                        item.role === "user"
+                          ? "bubble user"
+                          : item.role === "system"
+                            ? "bubble system"
+                            : "bubble ai"
+                      }
+                    >
+                      <div className="bubbleMeta">
+                        <span>{item.role === "user" ? "You" : item.role === "system" ? "System" : "AI"}</span>
+                        <span className="bubbleStats">
+                          <span>{item.estimatedTokens.toLocaleString()} tokens</span>
+                          <time dateTime={item.createdAt}>{formatChatTime(item.createdAt)}</time>
+                        </span>
+                      </div>
+                      <div className="bubbleText">{displayText}</div>
+                      {item.usedFiles && item.usedFiles.length > 0 && (
+                        <details className="usedFiles">
+                          <summary>Context used</summary>
+                          <div>
+                            {item.usedFiles.map((path) => (
+                              <code key={path}>{path}</code>
+                            ))}
+                          </div>
+                        </details>
+                      )}
                     </div>
-                    <div className="bubbleText">{item.text}</div>
-                    {item.usedFiles && item.usedFiles.length > 0 && (
-                      <details className="usedFiles">
-                        <summary>Context used</summary>
-                        <div>
-                          {item.usedFiles.map((path) => (
-                            <code key={path}>{path}</code>
-                          ))}
-                        </div>
-                      </details>
-                    )}
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </section>

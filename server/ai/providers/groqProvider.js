@@ -28,7 +28,7 @@ export async function callGroq({ model, instructions, input, signal }) {
   const client = new OpenAI({
     apiKey,
     baseURL: "https://api.groq.com/openai/v1",
-    timeout: 360000
+    timeout: 900000
   });
 
   try {

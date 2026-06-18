@@ -117,9 +117,12 @@ export function validateProviderModel(provider, model) {
   }
 }
 
-export async function callAi({ provider, model, instructions, input, signal }) {
+export async function callAi({ provider, model, instructions, input, signal, allowLargeInput = false }) {
   validateProviderModel(provider, model);
-  assertInputWithinLimit(input);
+
+  if (!allowLargeInput) {
+    assertInputWithinLimit(input);
+  }
 
   if (provider === OPENAI_PROVIDER) {
     return callOpenAI({ model, instructions, input, signal });
