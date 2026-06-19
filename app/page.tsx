@@ -19,6 +19,12 @@ type AiChange = {
   content?: string;
 };
 
+type ChangedFileSummary = {
+  action: AiChange["action"];
+  path: string;
+  savedToDisk: boolean;
+};
+
 type AiResponse = {
   type?: "answer" | "edit";
   message?: string;
@@ -41,6 +47,7 @@ type ChatEntry = {
   estimatedTokens: number;
   transient?: boolean;
   usedFiles?: string[];
+  changedFiles?: ChangedFileSummary[];
 };
 
 type TreeNode = {
@@ -238,15 +245,42 @@ function cleanPath(path: string) {
   return path.replaceAll("\\", "/").replace(/^\/+/, "").replace(/\/+/g, "/");
 }
 
-function createChatEntry(role: ChatEntry["role"], text: string, transient = false, usedFiles: string[] = []): ChatEntry {
+function createChatEntry(
+  role: ChatEntry["role"],
+  text: string,
+  transient = false,
+  usedFiles: string[] = [],
+  changedFiles: ChangedFileSummary[] = []
+): ChatEntry {
   return {
     role,
     text,
     transient,
     usedFiles,
+    changedFiles,
     estimatedTokens: estimateTokens(text),
     createdAt: new Date().toISOString()
   };
+}
+
+function buildChangedFiles(changes: AiChange[], savedToDisk: boolean): ChangedFileSummary[] {
+  return changes.map((change) => ({
+    action: change.action,
+    path: cleanPath(change.path),
+    savedToDisk
+  }));
+}
+
+function formatChangedFilesMessage(changes: AiChange[], savedToDisk: boolean) {
+  const changedFilesLabel = `${changes.length} file${changes.length === 1 ? "" : "s"}`;
+  const status = savedToDisk ? "Edited and saved" : "Edited";
+  const paths = changes
+    .slice(0, 8)
+    .map((change) => `${change.action} ${cleanPath(change.path)}`)
+    .join("\n");
+  const remaining = changes.length > 8 ? `\n...and ${changes.length - 8} more` : "";
+
+  return `${status} ${changedFilesLabel}:\n${paths}${remaining}`;
 }
 
 function estimateTokens(text: string) {
@@ -1566,7 +1600,7 @@ export default function Home() {
         try {
           const diskWrites = await applyChangeSetEverywhere(changes);
           const firstChange = changes.find((change) => change.action !== "delete");
-          const changedFilesLabel = `${changes.length} file${changes.length === 1 ? "" : "s"}`;
+          const savedToDisk = diskWrites > 0;
 
           if (firstChange?.path) {
             setActivePath(cleanPath(firstChange.path));
@@ -1580,12 +1614,13 @@ export default function Home() {
             ...current,
             createChatEntry(
               "ai",
-              diskWrites > 0 ? `Edited and saved ${changedFilesLabel}.` : `Edited ${changedFilesLabel}.`,
+              formatChangedFilesMessage(changes, savedToDisk),
               false,
-              data.usedFiles || []
+              data.usedFiles || [],
+              buildChangedFiles(changes, savedToDisk)
             )
           ]);
-          setToast(diskWrites > 0 ? "AI edited and saved files" : "AI edited files");
+          setToast(savedToDisk ? "AI edited and saved files" : "AI edited files");
         } catch (error) {
           setPendingChanges(changes);
           const firstPreviewIndex = changes.findIndex((change) => change.action !== "delete");
@@ -1593,7 +1628,13 @@ export default function Home() {
           setRightPanelTab("changes");
           setChat((current) => [
             ...current,
-            createChatEntry("ai", error instanceof Error ? `Edits are ready, but saving failed: ${error.message}` : "Edits are ready, but saving failed.", false, data.usedFiles || [])
+            createChatEntry(
+              "ai",
+              error instanceof Error ? `Edits are ready, but saving failed: ${error.message}` : "Edits are ready, but saving failed.",
+              false,
+              data.usedFiles || [],
+              buildChangedFiles(changes, false)
+            )
           ]);
           setToast("Review pending edits");
         }
@@ -1727,8 +1768,20 @@ export default function Home() {
 
     try {
       const diskWrites = await applyChangeSetEverywhere([change]);
+      const savedToDisk = diskWrites > 0;
+
       removePendingChangePaths(new Set([cleanPath(change.path)]));
-      setToast(diskWrites > 0 ? `Applied and saved ${change.path}` : `Applied ${change.path}`);
+      setChat((current) => [
+        ...current,
+        createChatEntry(
+          "system",
+          formatChangedFilesMessage([change], savedToDisk),
+          false,
+          [],
+          buildChangedFiles([change], savedToDisk)
+        )
+      ]);
+      setToast(savedToDisk ? `Applied and saved ${change.path}` : `Applied ${change.path}`);
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not apply change");
     }
@@ -1754,8 +1807,10 @@ export default function Home() {
   async function applyChanges() {
     try {
       const diskWrites = await applyChangeSetEverywhere(pendingChanges);
+      const appliedChanges = pendingChanges;
+      const savedToDisk = diskWrites > 0;
 
-      const firstChange = pendingChanges.find((change) => change.action !== "delete");
+      const firstChange = appliedChanges.find((change) => change.action !== "delete");
 
       if (firstChange?.path) {
         setActivePath(cleanPath(firstChange.path));
@@ -1764,7 +1819,17 @@ export default function Home() {
       setPendingChanges([]);
       setPreviewChangeIndex(null);
       setProposalBaseline(null);
-      setToast(diskWrites > 0 ? "Changes applied and saved to disk" : "Changes applied successfully");
+      setChat((current) => [
+        ...current,
+        createChatEntry(
+          "system",
+          formatChangedFilesMessage(appliedChanges, savedToDisk),
+          false,
+          [],
+          buildChangedFiles(appliedChanges, savedToDisk)
+        )
+      ]);
+      setToast(savedToDisk ? "Changes applied and saved to disk" : "Changes applied successfully");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not apply changes");
     }
@@ -2338,6 +2403,20 @@ export default function Home() {
                         </span>
                       </div>
                       <div className="bubbleText">{displayText}</div>
+                      {item.changedFiles && item.changedFiles.length > 0 && (
+                        <div className="changedFiles">
+                          <div className="changedFilesTitle">Files edited</div>
+                          <div>
+                            {item.changedFiles.map((file) => (
+                              <div key={`${file.action}:${file.path}`} className="changedFileRow">
+                                <span className={`changeBadge changeBadge-${file.action}`}>{file.action}</span>
+                                <code>{file.path}</code>
+                                <strong>{file.savedToDisk ? "Saved" : "Applied"}</strong>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {item.usedFiles && item.usedFiles.length > 0 && (
                         <details className="usedFiles">
                           <summary>Context used</summary>
