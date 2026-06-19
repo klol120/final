@@ -1830,11 +1830,11 @@ button:disabled {
 
 .changedFileRow code {
   min-width: 0;
-  overflow: hidden;
   color: var(--text);
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .changedFileRow strong {

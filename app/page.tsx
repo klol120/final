@@ -245,6 +245,11 @@ function cleanPath(path: string) {
   return path.replaceAll("\\", "/").replace(/^\/+/, "").replace(/\/+/g, "/");
 }
 
+function changeDisplayPath(change: AiChange) {
+  const path = cleanPath(change.path || "");
+  return path || "(unknown file)";
+}
+
 function createChatEntry(
   role: ChatEntry["role"],
   text: string,
@@ -266,21 +271,41 @@ function createChatEntry(
 function buildChangedFiles(changes: AiChange[], savedToDisk: boolean): ChangedFileSummary[] {
   return changes.map((change) => ({
     action: change.action,
-    path: cleanPath(change.path),
+    path: changeDisplayPath(change),
     savedToDisk
   }));
 }
 
 function formatChangedFilesMessage(changes: AiChange[], savedToDisk: boolean) {
-  const changedFilesLabel = `${changes.length} file${changes.length === 1 ? "" : "s"}`;
   const status = savedToDisk ? "Edited and saved" : "Edited";
-  const paths = changes
+  const displayedChanges = changes.map((change) => ({
+    action: change.action,
+    path: changeDisplayPath(change)
+  }));
+  const headline =
+    displayedChanges.length === 1
+      ? `${status} ${displayedChanges[0].path}.`
+      : `${status} ${displayedChanges.length} files: ${displayedChanges
+          .slice(0, 3)
+          .map((change) => change.path)
+          .join(", ")}${displayedChanges.length > 3 ? `, +${displayedChanges.length - 3} more` : ""}.`;
+  const paths = displayedChanges
     .slice(0, 8)
-    .map((change) => `${change.action} ${cleanPath(change.path)}`)
+    .map((change) => `${change.action} ${change.path}`)
     .join("\n");
   const remaining = changes.length > 8 ? `\n...and ${changes.length - 8} more` : "";
 
-  return `${status} ${changedFilesLabel}:\n${paths}${remaining}`;
+  return `${headline}\n\nFiles edited:\n${paths}${remaining}`;
+}
+
+function formatChangedFilesToast(changes: AiChange[], savedToDisk: boolean) {
+  const status = savedToDisk ? "Edited and saved" : "Edited";
+
+  if (changes.length === 1) {
+    return `${status} ${changeDisplayPath(changes[0])}`;
+  }
+
+  return `${status} ${changes.length} files`;
 }
 
 function estimateTokens(text: string) {
@@ -1620,7 +1645,7 @@ export default function Home() {
               buildChangedFiles(changes, savedToDisk)
             )
           ]);
-          setToast(savedToDisk ? "AI edited and saved files" : "AI edited files");
+          setToast(formatChangedFilesToast(changes, savedToDisk));
         } catch (error) {
           setPendingChanges(changes);
           const firstPreviewIndex = changes.findIndex((change) => change.action !== "delete");
