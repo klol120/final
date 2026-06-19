@@ -85,7 +85,8 @@ const PROVIDER_OPTIONS = [
   { value: "auto", label: "Auto fallback" },
   { value: "openai", label: "OpenAI" },
   { value: "gemini", label: "Google Gemini" },
-  { value: "groq", label: "Groq" }
+  { value: "groq", label: "Groq" },
+  { value: "openrouter", label: "OpenRouter" }
 ];
 
 const MODEL_GROUPS = [
@@ -142,13 +143,25 @@ const MODEL_GROUPS = [
       { value: "groq/compound", label: "groq/compound - agentic tools" },
       { value: "groq/compound-mini", label: "groq/compound-mini - fast agentic tools" }
     ]
+  },
+  {
+    provider: "openrouter",
+    label: "OpenRouter",
+    models: [
+      { value: "deepseek/deepseek-chat-v3-0324:free", label: "deepseek-chat-v3-0324 - free" },
+      { value: "deepseek/deepseek-r1-0528:free", label: "deepseek-r1-0528 - free reasoning" },
+      { value: "qwen/qwen3-coder:free", label: "qwen3-coder - free coding" },
+      { value: "meta-llama/llama-3.3-70b-instruct:free", label: "llama-3.3-70b-instruct - free" },
+      { value: "google/gemini-2.0-flash-exp:free", label: "gemini-2.0-flash-exp - free" }
+    ]
   }
 ];
 
 const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
   openai: "gpt-5.4-mini",
   gemini: "gemini-3.1-flash-lite",
-  groq: "llama-3.3-70b-versatile"
+  groq: "llama-3.3-70b-versatile",
+  openrouter: "deepseek/deepseek-chat-v3-0324:free"
 };
 
 const MODEL_PRESETS: ModelPreset[] = [
@@ -198,11 +211,17 @@ const MODEL_PRICING_PER_MILLION: Record<string, { input: number; output: number 
   "openai:gpt-4o-mini": { input: 0.15, output: 0.6 },
   "groq:llama-3.3-70b-versatile": { input: 0.59, output: 0.79 },
   "groq:llama-3.1-8b-instant": { input: 0.05, output: 0.08 },
-  "groq:qwen/qwen3-32b": { input: 0.29, output: 0.59 }
+  "groq:qwen/qwen3-32b": { input: 0.29, output: 0.59 },
+  "openrouter:deepseek/deepseek-chat-v3-0324:free": { input: 0, output: 0 },
+  "openrouter:deepseek/deepseek-r1-0528:free": { input: 0, output: 0 },
+  "openrouter:qwen/qwen3-coder:free": { input: 0, output: 0 },
+  "openrouter:meta-llama/llama-3.3-70b-instruct:free": { input: 0, output: 0 },
+  "openrouter:google/gemini-2.0-flash-exp:free": { input: 0, output: 0 }
 };
 
 function normalizeProvider(provider: string) {
   if (provider === "grok") return "groq";
+  if (provider === "open-router") return "openrouter";
   return ALL_PROVIDER_VALUES.includes(provider) ? provider : "openai";
 }
 

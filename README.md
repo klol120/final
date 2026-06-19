@@ -17,7 +17,9 @@ npm install
 
 ```env
 OPENAI_API_KEY=your_key
+GEMINI_API_KEY=your_gemini_key
 GROQ_API_KEY=your_groq_key
+OPENROUTER_API_KEY=your_openrouter_key
 APP_PASSWORD=your_password
 MAX_INPUT_CHARS=220000
 ```
@@ -42,7 +44,9 @@ Add these environment variables in Vercel:
 
 ```env
 OPENAI_API_KEY=your_key
+GEMINI_API_KEY=your_gemini_key
 GROQ_API_KEY=your_groq_key
+OPENROUTER_API_KEY=your_openrouter_key
 APP_PASSWORD=your_password
 MAX_INPUT_CHARS=220000
 ```
