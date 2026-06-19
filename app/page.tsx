@@ -721,9 +721,13 @@ export default function Home() {
   const [collapsedFolders, setCollapsedFolders] = useState<string[]>([]);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const [workspaceRootName, setWorkspaceRootName] = useState("");
+  const [syncingDisk, setSyncingDisk] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const draftInputRef = useRef<HTMLInputElement | null>(null);
   const aiAbortRef = useRef<AbortController | null>(null);
+  const workspaceDirectoryRef = useRef<any>(null);
+  const fileHandleMapRef = useRef<Map<string, any>>(new Map());
 
   const tree = useMemo(() => buildTree(files), [files]);
   const filteredTree = useMemo(() => filterTreeByQuery(tree, fileSearch), [tree, fileSearch]);
@@ -897,6 +901,182 @@ export default function Home() {
     setToast("Project created");
   }
 
+  async function readWorkspaceDirectory(directoryHandle: any, basePath = ""): Promise<ProjectFile[]> {
+    const imported: ProjectFile[] = [];
+    let readableChildCount = 0;
+
+    for await (const entry of directoryHandle.values()) {
+      const path = cleanPath(basePath ? `${basePath}/${entry.name}` : entry.name);
+
+      if (!path || shouldIgnoreImportedPath(path)) continue;
+
+      if (entry.kind === "directory") {
+        const childFiles = await readWorkspaceDirectory(entry, path);
+        readableChildCount += childFiles.length;
+
+        if (childFiles.length === 0) {
+          imported.push({ path: `${path}/.keep`, content: "" });
+        } else {
+          imported.push(...childFiles);
+        }
+
+        continue;
+      }
+
+      if (entry.kind !== "file" || isBinaryLike(path)) continue;
+
+      try {
+        const file = await entry.getFile();
+        const content = await file.text();
+
+        fileHandleMapRef.current.set(path, entry);
+        imported.push({ path, content });
+        readableChildCount += 1;
+      } catch {
+        // Ignore unreadable files so one locked file does not block the whole workspace.
+      }
+    }
+
+    if (readableChildCount === 0 && basePath) {
+      return [{ path: `${basePath}/.keep`, content: "" }];
+    }
+
+    return imported;
+  }
+
+  async function openLocalFolder() {
+    const picker = (window as any).showDirectoryPicker;
+
+    if (!picker) {
+      setToast("Folder access is not supported in this browser");
+      return;
+    }
+
+    try {
+      const directoryHandle = await picker({ mode: "readwrite" });
+
+      workspaceDirectoryRef.current = directoryHandle;
+      fileHandleMapRef.current = new Map();
+      setSyncingDisk(true);
+
+      const imported = await readWorkspaceDirectory(directoryHandle);
+      const sortedFiles = imported.sort((a, b) => a.path.localeCompare(b.path));
+      const firstFile = sortedFiles.find((file) => !file.path.endsWith("/.keep"));
+
+      setProjectName(directoryHandle.name || projectName || "local-workspace");
+      setWorkspaceRootName(directoryHandle.name || "Local folder");
+      setProjectCreated(true);
+      setFiles(sortedFiles);
+      setActivePath(firstFile?.path || "");
+      setSelectedFolder("");
+      setPendingChanges([]);
+      setPreviewChangeIndex(null);
+      setProposalBaseline(null);
+      setToast(`Opened ${directoryHandle.name || "folder"} with ${sortedFiles.length.toLocaleString()} item${sortedFiles.length === 1 ? "" : "s"}`);
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setToast("Could not open folder");
+      }
+    } finally {
+      setSyncingDisk(false);
+    }
+  }
+
+  async function ensureWorkspaceWritePermission() {
+    const directoryHandle = workspaceDirectoryRef.current;
+    if (!directoryHandle) return false;
+
+    const options = { mode: "readwrite" };
+
+    try {
+      if (directoryHandle.queryPermission) {
+        const current = await directoryHandle.queryPermission(options);
+        if (current === "granted") return true;
+      }
+
+      if (directoryHandle.requestPermission) {
+        return (await directoryHandle.requestPermission(options)) === "granted";
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function getWorkspaceParentDirectory(path: string, create: boolean) {
+    const directoryHandle = workspaceDirectoryRef.current;
+    if (!directoryHandle) throw new Error("No folder is open.");
+
+    const parts = cleanPath(path).split("/").filter(Boolean);
+    const directories = parts.slice(0, -1);
+    let current = directoryHandle;
+
+    for (const directoryName of directories) {
+      current = await current.getDirectoryHandle(directoryName, { create });
+    }
+
+    return current;
+  }
+
+  async function writeWorkspaceFile(path: string, content: string) {
+    const clean = cleanPath(path);
+    const parent = await getWorkspaceParentDirectory(clean, true);
+    const name = fileName(clean);
+    const fileHandle = await parent.getFileHandle(name, { create: true });
+    const writable = await fileHandle.createWritable();
+
+    await writable.write(content);
+    await writable.close();
+    fileHandleMapRef.current.set(clean, fileHandle);
+  }
+
+  async function deleteWorkspaceEntry(path: string) {
+    const clean = cleanPath(path);
+    const parent = await getWorkspaceParentDirectory(clean, false);
+    const name = fileName(clean);
+
+    try {
+      await parent.removeEntry(name, { recursive: true });
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "NotFoundError")) {
+        throw error;
+      }
+    }
+
+    fileHandleMapRef.current.delete(clean);
+  }
+
+  async function syncChangeSetToDisk(changes: AiChange[]) {
+    if (!workspaceDirectoryRef.current) return 0;
+
+    const allowed = await ensureWorkspaceWritePermission();
+    if (!allowed) throw new Error("Write permission was denied.");
+
+    setSyncingDisk(true);
+
+    try {
+      let writes = 0;
+
+      for (const change of changes) {
+        const path = cleanPath(change.path);
+        if (!path || path.endsWith("/.keep")) continue;
+
+        if (change.action === "delete") {
+          await deleteWorkspaceEntry(path);
+        } else {
+          await writeWorkspaceFile(path, change.content || "");
+        }
+
+        writes += 1;
+      }
+
+      return writes;
+    } finally {
+      setSyncingDisk(false);
+    }
+  }
+
   function fullPath(name: string) {
     const cleanName = cleanPath(name.trim());
     if (!selectedFolder) return cleanName;
@@ -930,13 +1110,22 @@ export default function Home() {
     }
   }
 
-  function createUntitledFile() {
+  async function createUntitledFile() {
     let index = 1;
     let path = fullPath("untitled.txt");
 
     while (files.some((file) => file.path === path)) {
       index += 1;
       path = fullPath(`untitled-${index}.txt`);
+    }
+
+    if (workspaceDirectoryRef.current) {
+      try {
+        await syncChangeSetToDisk([{ action: "create", path, content: "" }]);
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : "Could not create file on disk");
+        return;
+      }
     }
 
     upsertFiles([{ path, content: "" }]);
@@ -965,7 +1154,7 @@ export default function Home() {
     return draft.parentPath ? cleanPath(`${draft.parentPath}/${cleanName}`) : cleanName;
   }
 
-  function commitDraft() {
+  async function commitDraft() {
     if (!draftItem) return;
 
     const path = getDraftPath(draftItem);
@@ -985,6 +1174,16 @@ export default function Home() {
         return;
       }
 
+      if (workspaceDirectoryRef.current) {
+        try {
+          await getWorkspaceParentDirectory(keepPath, true);
+        } catch (error) {
+          setToast(error instanceof Error ? error.message : "Could not create folder on disk");
+          draftInputRef.current?.focus();
+          return;
+        }
+      }
+
       upsertFiles([{ path: keepPath, content: "" }]);
       setSelectedFolder(folderPath);
       setDraftItem(null);
@@ -996,6 +1195,16 @@ export default function Home() {
       setToast("A file with that name already exists");
       draftInputRef.current?.focus();
       return;
+    }
+
+    if (workspaceDirectoryRef.current) {
+      try {
+        await syncChangeSetToDisk([{ action: "create", path, content: "" }]);
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : "Could not create file on disk");
+        draftInputRef.current?.focus();
+        return;
+      }
     }
 
     upsertFiles([{ path, content: "" }]);
@@ -1018,9 +1227,39 @@ export default function Home() {
     );
   }
 
-  function deleteFile(path: string) {
+  async function saveActiveFileToDisk() {
+    if (!activeFile || !workspaceDirectoryRef.current) return;
+
+    const allowed = await ensureWorkspaceWritePermission();
+    if (!allowed) {
+      setToast("Write permission was denied");
+      return;
+    }
+
+    setSyncingDisk(true);
+
+    try {
+      await writeWorkspaceFile(activeFile.path, activeFile.content);
+      setToast(`Saved ${activeFile.path}`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not save file");
+    } finally {
+      setSyncingDisk(false);
+    }
+  }
+
+  async function deleteFile(path: string) {
     const ok = window.confirm(`Are you sure you want to delete "${path}"?`);
     if (!ok) return;
+
+    if (workspaceDirectoryRef.current) {
+      try {
+        await syncChangeSetToDisk([{ action: "delete", path }]);
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : "Could not delete file on disk");
+        return;
+      }
+    }
 
     setFiles((current) => current.filter((file) => file.path !== path));
 
@@ -1032,7 +1271,7 @@ export default function Home() {
     setToast(`Deleted ${path}`);
   }
 
-  function deleteFolder(path: string) {
+  async function deleteFolder(path: string) {
     const clean = cleanPath(path);
     const affected = files.filter((file) => file.path === `${clean}/.keep` || file.path.startsWith(`${clean}/`));
 
@@ -1041,6 +1280,15 @@ export default function Home() {
     );
 
     if (!ok) return;
+
+    if (workspaceDirectoryRef.current) {
+      try {
+        await deleteWorkspaceEntry(clean);
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : "Could not delete folder on disk");
+        return;
+      }
+    }
 
     setFiles((current) => current.filter((file) => !(file.path === `${clean}/.keep` || file.path.startsWith(`${clean}/`))));
 
@@ -1056,7 +1304,7 @@ export default function Home() {
     setToast(`Deleted folder ${clean}`);
   }
 
-  function moveFileToFolder(sourcePath: string, targetFolder: string) {
+  async function moveFileToFolder(sourcePath: string, targetFolder: string) {
     const source = cleanPath(sourcePath);
     const target = cleanPath(targetFolder);
     const newPath = target ? cleanPath(`${target}/${fileName(source)}`) : fileName(source);
@@ -1066,6 +1314,20 @@ export default function Home() {
     if (files.some((file) => file.path === newPath)) {
       setToast("A file with that name already exists there");
       return;
+    }
+
+    if (workspaceDirectoryRef.current) {
+      const sourceFile = files.find((file) => file.path === source);
+
+      try {
+        await syncChangeSetToDisk([
+          { action: "create", path: newPath, content: sourceFile?.content || "" },
+          { action: "delete", path: source }
+        ]);
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : "Could not move file on disk");
+        return;
+      }
     }
 
     setFiles((current) =>
@@ -1295,19 +1557,53 @@ export default function Home() {
         return;
       }
 
-      setChat((current) => [...current, createChatEntry("ai", data.message || "Done.", false, data.usedFiles || [])]);
-
       if (data.type === "edit" && data.changes?.length) {
-        setProposalBaseline(files.map((file) => ({ ...file })));
-        setPendingChanges(data.changes);
-        const firstPreviewIndex = data.changes.findIndex((change) => change.action !== "delete");
-        setPreviewChangeIndex(firstPreviewIndex >= 0 ? firstPreviewIndex : null);
-        setRightPanelTab("changes");
-        setToast("AI prepared file changes");
-      } else {
-        setRightPanelTab("chat");
-        setToast("AI answered");
+        const changes = data.changes;
+        const baseline = files.map((file) => ({ ...file }));
+
+        setProposalBaseline(baseline);
+
+        try {
+          const diskWrites = await applyChangeSetEverywhere(changes);
+          const firstChange = changes.find((change) => change.action !== "delete");
+          const changedFilesLabel = `${changes.length} file${changes.length === 1 ? "" : "s"}`;
+
+          if (firstChange?.path) {
+            setActivePath(cleanPath(firstChange.path));
+          }
+
+          setPendingChanges([]);
+          setPreviewChangeIndex(null);
+          setProposalBaseline(null);
+          setRightPanelTab("chat");
+          setChat((current) => [
+            ...current,
+            createChatEntry(
+              "ai",
+              diskWrites > 0 ? `Edited and saved ${changedFilesLabel}.` : `Edited ${changedFilesLabel}.`,
+              false,
+              data.usedFiles || []
+            )
+          ]);
+          setToast(diskWrites > 0 ? "AI edited and saved files" : "AI edited files");
+        } catch (error) {
+          setPendingChanges(changes);
+          const firstPreviewIndex = changes.findIndex((change) => change.action !== "delete");
+          setPreviewChangeIndex(firstPreviewIndex >= 0 ? firstPreviewIndex : null);
+          setRightPanelTab("changes");
+          setChat((current) => [
+            ...current,
+            createChatEntry("ai", error instanceof Error ? `Edits are ready, but saving failed: ${error.message}` : "Edits are ready, but saving failed.", false, data.usedFiles || [])
+          ]);
+          setToast("Review pending edits");
+        }
+
+        return;
       }
+
+      setChat((current) => [...current, createChatEntry("ai", data.message || "No code edits were returned.", false, data.usedFiles || [])]);
+      setRightPanelTab("chat");
+      setToast("No edits returned");
     } catch (error) {
       setChat((current) => current.filter((item) => !item.transient));
 
@@ -1379,6 +1675,12 @@ export default function Home() {
     });
   }
 
+  async function applyChangeSetEverywhere(changes: AiChange[]) {
+    const diskWrites = await syncChangeSetToDisk(changes);
+    applyChangeSet(changes);
+    return diskWrites;
+  }
+
   function removePendingChangePaths(paths: Set<string>) {
     setPendingChanges((current) => current.filter((change) => !paths.has(cleanPath(change.path))));
     setPreviewChangeIndex(null);
@@ -1419,13 +1721,17 @@ export default function Home() {
     }
   }
 
-  function applySingleChange(index: number) {
+  async function applySingleChange(index: number) {
     const change = pendingChanges[index];
     if (!change) return;
 
-    applyChangeSet([change]);
-    removePendingChangePaths(new Set([cleanPath(change.path)]));
-    setToast(`Applied ${change.path}`);
+    try {
+      const diskWrites = await applyChangeSetEverywhere([change]);
+      removePendingChangePaths(new Set([cleanPath(change.path)]));
+      setToast(diskWrites > 0 ? `Applied and saved ${change.path}` : `Applied ${change.path}`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not apply change");
+    }
   }
 
   function discardSingleChange(index: number) {
@@ -1445,19 +1751,23 @@ export default function Home() {
     });
   }
 
-  function applyChanges() {
-    applyChangeSet(pendingChanges);
+  async function applyChanges() {
+    try {
+      const diskWrites = await applyChangeSetEverywhere(pendingChanges);
 
-    const firstChange = pendingChanges.find((change) => change.action !== "delete");
+      const firstChange = pendingChanges.find((change) => change.action !== "delete");
 
-    if (firstChange?.path) {
-      setActivePath(cleanPath(firstChange.path));
+      if (firstChange?.path) {
+        setActivePath(cleanPath(firstChange.path));
+      }
+
+      setPendingChanges([]);
+      setPreviewChangeIndex(null);
+      setProposalBaseline(null);
+      setToast(diskWrites > 0 ? "Changes applied and saved to disk" : "Changes applied successfully");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not apply changes");
     }
-
-    setPendingChanges([]);
-    setPreviewChangeIndex(null);
-    setProposalBaseline(null);
-    setToast("Changes applied successfully");
   }
 
   function discardChanges() {
@@ -1634,6 +1944,9 @@ export default function Home() {
           />
 
           <button onClick={createProject}>Create Project</button>
+          <button className="secondaryStartButton" onClick={openLocalFolder} disabled={syncingDisk}>
+            Open Local Folder
+          </button>
         </div>
       </main>
     );
@@ -1674,6 +1987,9 @@ export default function Home() {
         </div>
 
         <div className="toolbar">
+          <button onClick={openLocalFolder} disabled={syncingDisk}>
+            {workspaceRootName ? "Switch Folder" : "Open Folder"}
+          </button>
           <button onClick={() => fileInputRef.current?.click()}>Import / ZIP</button>
           <button onClick={exportProject}>Export ZIP</button>
         </div>
@@ -1688,8 +2004,8 @@ export default function Home() {
         />
 
         <div className="selectedFolderBox">
-          <span>Current folder</span>
-          <strong>{selectedFolder || "/"}</strong>
+          <span>{workspaceRootName ? "Disk folder" : "Current folder"}</span>
+          <strong>{workspaceRootName ? `${workspaceRootName}${selectedFolder ? `/${selectedFolder}` : ""}` : selectedFolder || "/"}</strong>
         </div>
 
         <div className="treeRoot">
@@ -1772,7 +2088,7 @@ export default function Home() {
         {pendingFileCount > 0 && (
           <div className="proposalBar">
             <div>
-              <strong>AI proposal ready</strong>
+              <strong>AI edits need review</strong>
               <span>{pendingFileCount} file{pendingFileCount === 1 ? "" : "s"} pending</span>
             </div>
             <div className="proposalActions">
@@ -1801,6 +2117,9 @@ export default function Home() {
                   </>
                 ) : (
                   <>
+                    {workspaceRootName && (
+                      <button type="button" onClick={saveActiveFileToDisk} disabled={syncingDisk}>Save file</button>
+                    )}
                     <button type="button" onClick={() => navigator.clipboard?.writeText(editorPath)}>Copy path</button>
                     <button type="button" onClick={exportProject}>Export ZIP</button>
                   </>
@@ -1813,7 +2132,7 @@ export default function Home() {
                 <div className="diffEditorShell">
                   <div className="diffPaneLabels">
                     <span>Original</span>
-                    <span>AI proposal</span>
+                    <span>AI edits</span>
                   </div>
                   <MonacoDiffEditor
                     height="100%"
@@ -1871,7 +2190,7 @@ export default function Home() {
           <span>{editorPath || "No file selected"}</span>
           <span>{activeLanguage}</span>
           <span>{activeLineCount.toLocaleString()} lines</span>
-          <span>{previewChange ? "Previewing AI proposal" : pendingFileCount > 0 ? "Proposal pending" : "Ready"}</span>
+          <span>{previewChange ? "Previewing AI edits" : pendingFileCount > 0 ? "Edits pending" : "Ready"}</span>
           <span>{selectedProvider} / {selectedModel}</span>
         </div>
       </section>
@@ -2052,7 +2371,7 @@ export default function Home() {
             {pendingChanges.length === 0 ? (
               <div className="chatEmpty">
                 <strong>No pending changes.</strong>
-                <span>AI proposals will appear here with per-file controls.</span>
+                <span>AI edits only appear here if they need manual review.</span>
               </div>
             ) : (
               pendingChanges.map((change, index) => (

@@ -8,16 +8,16 @@ import {
   validateProviderModel
 } from "../../../server/ai/aiRouter.js";
 
-const MAX_SELECTED_FILES = 22;
+const MAX_SELECTED_FILES = 30;
 const MAX_SMALL_PROJECT_FILES = 18;
-const MAX_FILE_CHARS = 28000;
-const MAX_ACTIVE_FILE_CHARS = 82000;
-const MAX_TOTAL_FILE_CHARS = 150000;
+const MAX_FILE_CHARS = 36000;
+const MAX_ACTIVE_FILE_CHARS = 100000;
+const MAX_TOTAL_FILE_CHARS = 190000;
 const MAX_FILE_INDEX_ITEMS = 700;
 const MAX_HISTORY_MESSAGES = 10;
 const MAX_HISTORY_MESSAGE_CHARS = 1400;
 const MAX_REPAIR_RESPONSE_CHARS = 12000;
-const MAX_EDIT_ATTEMPTS = 4;
+const MAX_EDIT_ATTEMPTS = 6;
 const MAX_PICKER_OUTLINE_CHARS = 900;
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css", ".scss", ".sass", ".less", ".json"];
 const STYLE_EXTENSIONS = [".css", ".scss", ".sass", ".less"];
@@ -615,7 +615,12 @@ function normalizeAiEditResponse(parsed: any) {
 function isLikelyEditRequest(message: string, mode: RequestBody["mode"]) {
   if (mode === "chat") return false;
 
-  return /\b(fix|edit|change|refactor|create|add|remove|delete|update|implement|make|build|improve|modify|replace|rename|move|style|design|bug|error|issue|feature|generate|write|apply)\b/i.test(message);
+  if (/\b(explain|describe|summarize|review|what|why|how)\b/i.test(message) &&
+    !/\b(fix|edit|change|refactor|create|add|remove|delete|update|implement|make|build|improve|modify|replace|rename|move|style|design|bug|error|issue|feature|generate|write|apply)\b/i.test(message)) {
+    return false;
+  }
+
+  return true;
 }
 
 function responseLooksLikeCodeInsteadOfJson(text: string) {
@@ -781,6 +786,7 @@ QUALITY MODE:
 - Take the time needed to understand the task and all selected context before answering.
 - Prioritize a correct, complete edit over a short or fast-looking answer.
 - Make every necessary file change that follows from the user's request and the selected context.
+- In code-edit mode, behave like an autonomous coding agent: modify files instead of giving implementation advice.
 
 CONTEXT RULES:
 - You were given selected relevant files and a project tree.
@@ -798,6 +804,7 @@ EDIT DISCIPLINE:
 - Update only files whose content appears in SELECTED FILE CONTENT with CONTENT_STATUS: FULL. You may create new files when the path is clearly required.
 - Do not return an edit unless at least one file actually changes.
 - Prefer the smallest complete change that satisfies the request while leaving unrelated code intact.
+- If the user's request is broad, make the best concrete code improvement that directly satisfies it using the selected files; do not answer with suggestions.
 
 FULL-FILE OUTPUT RULES:
 - For update/create, return full final file content.
@@ -828,7 +835,7 @@ When the user asks for edits, fixes, refactors, features, or new files, return O
   ]
 }
 
-When no edit is needed, return ONLY valid JSON:
+Return an answer only for explicit explanation, review, or question-only requests where changing code would be wrong. When no edit is needed, return ONLY valid JSON:
 
 {
   "type": "answer",
@@ -837,6 +844,7 @@ When no edit is needed, return ONLY valid JSON:
 
 Rules:
 - Never return code in normal chat for an edit request.
+- Never answer with a list of suggested changes for an edit request. Produce file edits.
 - Never return partial diffs.
 - Never wrap JSON in markdown.
 - Do not include \`\`\`json fences. The first character of your response must be { and the last character must be }.

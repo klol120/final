@@ -165,10 +165,28 @@ textarea:focus {
   padding: 13px;
 }
 
+.startCard .secondaryStartButton {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text-soft);
+}
+
 .startCard button:hover,
 .sendButton:hover:not(:disabled),
 .applyButton:hover {
   background: linear-gradient(180deg, #ffe9ac, #e3c173);
+}
+
+.startCard .secondaryStartButton:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: #20272f;
+  color: var(--text);
+}
+
+button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
 }
 
 .appShell {
@@ -217,7 +235,7 @@ textarea:focus {
 
 .toolbar {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
