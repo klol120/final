@@ -1,19 +1,22 @@
 import { callGemini, GEMINI_MODELS, GEMINI_PROVIDER } from "./providers/geminiProvider.js";
 import { callGroq, GROQ_MODELS, GROQ_PROVIDER } from "./providers/groqProvider.js";
 import { callOpenAI, OPENAI_MODELS, OPENAI_PROVIDER } from "./providers/openaiProvider.js";
+import { callOpenRouter, OPENROUTER_MODELS, OPENROUTER_PROVIDER } from "./providers/openrouterProvider.js";
 
 export const AUTO_PROVIDER = "auto";
 const PROVIDER_ALIASES = {
-  grok: GROQ_PROVIDER
+  grok: GROQ_PROVIDER,
+  "open-router": OPENROUTER_PROVIDER
 };
 
 export const PROVIDER_MODELS = {
   [OPENAI_PROVIDER]: OPENAI_MODELS,
   [GEMINI_PROVIDER]: GEMINI_MODELS,
-  [GROQ_PROVIDER]: GROQ_MODELS
+  [GROQ_PROVIDER]: GROQ_MODELS,
+  [OPENROUTER_PROVIDER]: OPENROUTER_MODELS
 };
 
-export const ALLOWED_PROVIDERS = [OPENAI_PROVIDER, GEMINI_PROVIDER, GROQ_PROVIDER, AUTO_PROVIDER];
+export const ALLOWED_PROVIDERS = [OPENAI_PROVIDER, GEMINI_PROVIDER, GROQ_PROVIDER, OPENROUTER_PROVIDER, AUTO_PROVIDER];
 
 export function getDefaultProvider() {
   const configured = PROVIDER_ALIASES[process.env.DEFAULT_AI_PROVIDER] || process.env.DEFAULT_AI_PROVIDER || OPENAI_PROVIDER;
@@ -31,13 +34,18 @@ export function getDefaultModel(provider) {
     return GROQ_MODELS.includes(configured) ? configured : GROQ_MODELS[0];
   }
 
+  if (provider === OPENROUTER_PROVIDER) {
+    const configured = process.env.DEFAULT_OPENROUTER_MODEL || "deepseek/deepseek-chat-v3-0324:free";
+    return OPENROUTER_MODELS.includes(configured) ? configured : OPENROUTER_MODELS[0];
+  }
+
   const configured = process.env.DEFAULT_OPENAI_MODEL || "gpt-5.4-mini";
   return OPENAI_MODELS.includes(configured) ? configured : OPENAI_MODELS[0];
 }
 
 export function getMaxInputChars() {
-  const parsed = Number(process.env.MAX_INPUT_CHARS || "120000");
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 120000;
+  const parsed = Number(process.env.MAX_INPUT_CHARS || "220000");
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 220000;
 }
 
 export function assertInputWithinLimit(input, label = "input") {
@@ -87,7 +95,15 @@ export function resolveProviderAndModel({ provider, model }) {
       };
     }
 
-    const error = new Error("Missing API key. Set OPENAI_API_KEY, GEMINI_API_KEY, or GROQ_API_KEY for auto provider fallback.");
+    if (process.env.OPENROUTER_API_KEY) {
+      return {
+        provider: OPENROUTER_PROVIDER,
+        requestedProvider,
+        model: OPENROUTER_MODELS.includes(model) ? model : getDefaultModel(OPENROUTER_PROVIDER)
+      };
+    }
+
+    const error = new Error("Missing API key. Set OPENAI_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY for auto provider fallback.");
     error.status = 500;
     throw error;
   }
@@ -117,20 +133,27 @@ export function validateProviderModel(provider, model) {
   }
 }
 
-export async function callAi({ provider, model, instructions, input }) {
+export async function callAi({ provider, model, instructions, input, signal, allowLargeInput = false, jsonSchema, jsonSchemaName }) {
   validateProviderModel(provider, model);
-  assertInputWithinLimit(input);
+
+  if (!allowLargeInput) {
+    assertInputWithinLimit(input);
+  }
 
   if (provider === OPENAI_PROVIDER) {
-    return callOpenAI({ model, instructions, input });
+    return callOpenAI({ model, instructions, input, signal, jsonSchema, jsonSchemaName });
   }
 
   if (provider === GEMINI_PROVIDER) {
-    return callGemini({ model, instructions, input });
+    return callGemini({ model, instructions, input, signal, jsonSchema, jsonSchemaName });
   }
 
   if (provider === GROQ_PROVIDER) {
-    return callGroq({ model, instructions, input });
+    return callGroq({ model, instructions, input, signal, jsonSchema, jsonSchemaName });
+  }
+
+  if (provider === OPENROUTER_PROVIDER) {
+    return callOpenRouter({ model, instructions, input, signal, jsonSchema, jsonSchemaName });
   }
 
   const error = new Error(`Invalid provider "${provider}".`);

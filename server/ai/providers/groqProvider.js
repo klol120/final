@@ -14,7 +14,21 @@ export const GROQ_MODELS = [
   "groq/compound-mini"
 ];
 
-export async function callGroq({ model, instructions, input }) {
+function isAbortError(error) {
+  return error?.name === "AbortError" || error?.name === "APIUserAbortError";
+}
+
+function getMaxOutputTokens() {
+  const parsed = Number(process.env.GROQ_MAX_OUTPUT_TOKENS || "32768");
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 32768;
+}
+
+function isResponseFormatError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /response_format|json|schema|unsupported/i.test(message);
+}
+
+export async function callGroq({ model, instructions, input, signal, jsonSchema }) {
   const apiKey = process.env.GROQ_API_KEY;
 
   if (!apiKey) {
@@ -24,17 +38,36 @@ export async function callGroq({ model, instructions, input }) {
   const client = new OpenAI({
     apiKey,
     baseURL: "https://api.groq.com/openai/v1",
-    timeout: 360000
+    timeout: 900000
   });
 
   try {
-    const response = await client.chat.completions.create({
-      model,
-      messages: [
-        { role: "system", content: instructions },
-        { role: "user", content: input }
-      ]
-    });
+    async function create(useJsonMode) {
+      const request = {
+        model,
+        temperature: 0,
+        max_completion_tokens: getMaxOutputTokens(),
+        messages: [
+          { role: "system", content: instructions },
+          { role: "user", content: input }
+        ]
+      };
+
+      if (useJsonMode && jsonSchema) {
+        request.response_format = { type: "json_object" };
+      }
+
+      return client.chat.completions.create(request, { signal });
+    }
+
+    let response;
+
+    try {
+      response = await create(Boolean(jsonSchema));
+    } catch (error) {
+      if (!jsonSchema || !isResponseFormatError(error)) throw error;
+      response = await create(false);
+    }
 
     return {
       provider: GROQ_PROVIDER,
@@ -43,6 +76,7 @@ export async function callGroq({ model, instructions, input }) {
       raw: response
     };
   } catch (error) {
+    if (isAbortError(error)) throw error;
     throw new Error(`Groq provider API failed: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
 }

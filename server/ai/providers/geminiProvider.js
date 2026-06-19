@@ -12,7 +12,21 @@ export const GEMINI_MODELS = [
   "gemini-2.5-flash-lite"
 ];
 
-export async function callGemini({ model, instructions, input }) {
+function isAbortError(error) {
+  return error?.name === "AbortError" || error?.name === "APIUserAbortError";
+}
+
+function getMaxOutputTokens() {
+  const parsed = Number(process.env.GEMINI_MAX_OUTPUT_TOKENS || "32768");
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 32768;
+}
+
+function isResponseFormatError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /responseMimeType|responseSchema|schema|json|unsupported/i.test(message);
+}
+
+export async function callGemini({ model, instructions, input, signal, jsonSchema }) {
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
@@ -22,13 +36,36 @@ export async function callGemini({ model, instructions, input }) {
   const ai = new GoogleGenAI({ apiKey });
 
   try {
-    const response = await ai.models.generateContent({
-      model,
-      contents: input,
-      config: {
-        systemInstruction: instructions
+    async function generate(useSchema) {
+      const config = {
+        systemInstruction: instructions,
+        abortSignal: signal,
+        temperature: 0,
+        maxOutputTokens: getMaxOutputTokens()
+      };
+
+      if (useSchema && jsonSchema) {
+        config.responseMimeType = "application/json";
+        config.responseSchema = jsonSchema;
+      } else if (jsonSchema) {
+        config.responseMimeType = "application/json";
       }
-    });
+
+      return ai.models.generateContent({
+        model,
+        contents: input,
+        config
+      });
+    }
+
+    let response;
+
+    try {
+      response = await generate(Boolean(jsonSchema));
+    } catch (error) {
+      if (!jsonSchema || !isResponseFormatError(error)) throw error;
+      response = await generate(false);
+    }
 
     return {
       provider: GEMINI_PROVIDER,
@@ -37,6 +74,7 @@ export async function callGemini({ model, instructions, input }) {
       raw: response
     };
   } catch (error) {
+    if (isAbortError(error)) throw error;
     throw new Error(`Gemini provider API failed: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
 }
