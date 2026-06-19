@@ -16,7 +16,17 @@ function isAbortError(error) {
   return error?.name === "AbortError" || error?.name === "APIUserAbortError";
 }
 
-export async function callGemini({ model, instructions, input, signal }) {
+function getMaxOutputTokens() {
+  const parsed = Number(process.env.GEMINI_MAX_OUTPUT_TOKENS || "32768");
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 32768;
+}
+
+function isResponseFormatError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /responseMimeType|responseSchema|schema|json|unsupported/i.test(message);
+}
+
+export async function callGemini({ model, instructions, input, signal, jsonSchema }) {
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
@@ -26,14 +36,36 @@ export async function callGemini({ model, instructions, input, signal }) {
   const ai = new GoogleGenAI({ apiKey });
 
   try {
-    const response = await ai.models.generateContent({
-      model,
-      contents: input,
-      config: {
+    async function generate(useSchema) {
+      const config = {
         systemInstruction: instructions,
-        abortSignal: signal
+        abortSignal: signal,
+        temperature: 0,
+        maxOutputTokens: getMaxOutputTokens()
+      };
+
+      if (useSchema && jsonSchema) {
+        config.responseMimeType = "application/json";
+        config.responseSchema = jsonSchema;
+      } else if (jsonSchema) {
+        config.responseMimeType = "application/json";
       }
-    });
+
+      return ai.models.generateContent({
+        model,
+        contents: input,
+        config
+      });
+    }
+
+    let response;
+
+    try {
+      response = await generate(Boolean(jsonSchema));
+    } catch (error) {
+      if (!jsonSchema || !isResponseFormatError(error)) throw error;
+      response = await generate(false);
+    }
 
     return {
       provider: GEMINI_PROVIDER,

@@ -8,15 +8,98 @@ import {
   validateProviderModel
 } from "../../../server/ai/aiRouter.js";
 
-const MAX_SELECTED_FILES = 14;
-const MAX_SMALL_PROJECT_FILES = 14;
-const MAX_FILE_CHARS = 22000;
-const MAX_ACTIVE_FILE_CHARS = 64000;
-const MAX_TOTAL_FILE_CHARS = 98000;
+const MAX_SELECTED_FILES = 22;
+const MAX_SMALL_PROJECT_FILES = 18;
+const MAX_FILE_CHARS = 28000;
+const MAX_ACTIVE_FILE_CHARS = 82000;
+const MAX_TOTAL_FILE_CHARS = 150000;
 const MAX_FILE_INDEX_ITEMS = 700;
 const MAX_HISTORY_MESSAGES = 10;
 const MAX_HISTORY_MESSAGE_CHARS = 1400;
 const MAX_REPAIR_RESPONSE_CHARS = 12000;
+const MAX_EDIT_ATTEMPTS = 4;
+const MAX_PICKER_OUTLINE_CHARS = 900;
+const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css", ".scss", ".sass", ".less", ".json"];
+const STYLE_EXTENSIONS = [".css", ".scss", ".sass", ".less"];
+const COMMON_REQUEST_WORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "that",
+  "this",
+  "with",
+  "from",
+  "have",
+  "just",
+  "make",
+  "code",
+  "file",
+  "files",
+  "project",
+  "thing",
+  "things",
+  "right",
+  "wrong",
+  "good",
+  "bad",
+  "when",
+  "where",
+  "what",
+  "which",
+  "into",
+  "only",
+  "even",
+  "still",
+  "like",
+  "need",
+  "want",
+  "work",
+  "works",
+  "working",
+  "please",
+  "there",
+  "their",
+  "your",
+  "some",
+  "more",
+  "less",
+  "same",
+  "also",
+  "about"
+]);
+
+const FILE_PICKER_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    paths: {
+      type: "array",
+      items: { type: "string" }
+    },
+    reason: { type: "string" }
+  },
+  required: ["paths", "reason"]
+};
+
+const AI_EDIT_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    type: { type: "string", enum: ["edit", "answer"] },
+    message: { type: "string" },
+    changes: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["create", "update", "delete"] },
+          path: { type: "string" },
+          content: { type: "string" }
+        },
+        required: ["action", "path"]
+      }
+    }
+  },
+  required: ["type", "message"]
+};
 
 type ProjectFile = {
   path: string;
@@ -46,12 +129,111 @@ type PickFilesResponse = {
   reason?: string;
 };
 
+type SelectedFileStatus = {
+  truncated: boolean;
+  originalChars: number;
+  includedChars: number;
+};
+
 function cleanPath(path: string) {
   return path.replaceAll("\\", "/").replace(/^\/+/, "").replace(/\/+/g, "/");
 }
 
+function pathDirectory(path: string) {
+  const clean = cleanPath(path);
+  const slashIndex = clean.lastIndexOf("/");
+  return slashIndex >= 0 ? clean.slice(0, slashIndex) : "";
+}
+
+function fileName(path: string) {
+  const clean = cleanPath(path);
+  return clean.split("/").pop() || clean;
+}
+
+function fileStem(path: string) {
+  return fileName(path).replace(/\.[^.]+$/, "");
+}
+
+function fileExtension(path: string) {
+  const match = fileName(path).match(/\.[^.]+$/);
+  return match?.[0]?.toLowerCase() || "";
+}
+
+function joinRelativePath(baseDirectory: string, specifier: string) {
+  const parts = baseDirectory ? baseDirectory.split("/") : [];
+
+  for (const rawPart of specifier.split("/")) {
+    const part = rawPart.trim();
+
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      parts.pop();
+      continue;
+    }
+
+    parts.push(part);
+  }
+
+  return cleanPath(parts.join("/"));
+}
+
+function isUsefulSourcePath(path: string) {
+  const lower = cleanPath(path).toLowerCase();
+
+  if (
+    lower.includes("/node_modules/") ||
+    lower.startsWith("node_modules/") ||
+    lower.includes("/.next/") ||
+    lower.startsWith(".next/") ||
+    lower.includes("/dist/") ||
+    lower.includes("/build/") ||
+    lower.includes("/coverage/") ||
+    lower.includes("/.git/")
+  ) {
+    return false;
+  }
+
+  if (lower.endsWith("/.keep")) return false;
+  if (/\.(png|jpe?g|gif|webp|ico|svg|pdf|zip|mp4|mov|mp3|woff2?|ttf|otf)$/i.test(lower)) return false;
+
+  return true;
+}
+
+function getRequestTerms(message: string) {
+  const normalized = cleanPath(message)
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .toLowerCase();
+  const rawTerms = normalized.match(/[a-z0-9_./-]+/g) || [];
+  const terms = new Set<string>();
+
+  for (const rawTerm of rawTerms) {
+    for (const term of rawTerm.split(/[./_-]+/)) {
+      if (term.length < 3 || COMMON_REQUEST_WORDS.has(term)) continue;
+      terms.add(term);
+    }
+  }
+
+  return [...terms].slice(0, 40);
+}
+
+function hasAnyTerm(terms: string[], candidates: string[]) {
+  return candidates.some((candidate) => terms.includes(candidate));
+}
+
+function countTermHits(haystack: string, term: string, limit = 6) {
+  let hits = 0;
+  let index = haystack.indexOf(term);
+
+  while (index >= 0 && hits < limit) {
+    hits += 1;
+    index = haystack.indexOf(term, index + term.length);
+  }
+
+  return hits;
+}
+
 function uniqueExistingPaths(files: ProjectFile[], pathGroups: string[][]) {
-  const validPaths = new Set(files.filter((file) => !file.path.endsWith("/.keep")).map((file) => file.path));
+  const validPaths = new Set(files.filter((file) => isUsefulSourcePath(file.path)).map((file) => file.path));
   const result: string[] = [];
 
   for (const group of pathGroups) {
@@ -137,25 +319,151 @@ function buildFileOutline(content: string) {
   return outline.slice(0, 160).join("\n");
 }
 
-function keywordScore(message: string, file: ProjectFile) {
+function getImportSpecifiers(content: string) {
+  const specifiers = new Set<string>();
+  const patterns = [
+    /(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']/g,
+    /import\(\s*["']([^"']+)["']\s*\)/g,
+    /@import\s+(?:url\()?["']([^"']+)["']/g
+  ];
+
+  for (const pattern of patterns) {
+    let match = pattern.exec(content);
+
+    while (match) {
+      if (match[1]) specifiers.add(match[1]);
+      match = pattern.exec(content);
+    }
+  }
+
+  return [...specifiers];
+}
+
+function resolveImportSpecifier(fromPath: string, specifier: string, validPaths: Set<string>) {
+  if (!specifier.startsWith(".")) return "";
+
+  const basePath = joinRelativePath(pathDirectory(fromPath), specifier);
+  const candidates = [
+    basePath,
+    ...SOURCE_EXTENSIONS.map((extension) => `${basePath}${extension}`),
+    ...SOURCE_EXTENSIONS.map((extension) => `${basePath}/index${extension}`)
+  ];
+
+  return candidates.find((candidate) => validPaths.has(candidate)) || "";
+}
+
+function buildImportGraph(files: ProjectFile[]) {
+  const validPaths = new Set(files.filter((file) => isUsefulSourcePath(file.path)).map((file) => file.path));
+  const importsByPath = new Map<string, string[]>();
+  const importedByPath = new Map<string, string[]>();
+
+  for (const file of files) {
+    if (!validPaths.has(file.path)) continue;
+
+    const imports = getImportSpecifiers(file.content)
+      .map((specifier) => resolveImportSpecifier(file.path, specifier, validPaths))
+      .filter(Boolean);
+
+    importsByPath.set(file.path, [...new Set(imports)]);
+
+    for (const importedPath of imports) {
+      importedByPath.set(importedPath, [...(importedByPath.get(importedPath) || []), file.path]);
+    }
+  }
+
+  return { importsByPath, importedByPath };
+}
+
+function getSiblingCompanionPaths(files: ProjectFile[], path: string, message: string) {
+  const directory = pathDirectory(path);
+  const stem = fileStem(path).toLowerCase();
+  const extension = fileExtension(path);
+  const terms = getRequestTerms(message);
+  const isUiRequest = hasAnyTerm(terms, [
+    "button",
+    "buttons",
+    "form",
+    "forms",
+    "style",
+    "styles",
+    "css",
+    "layout",
+    "page",
+    "component",
+    "components",
+    "modal",
+    "menu",
+    "toolbar",
+    "sidebar",
+    "input",
+    "select",
+    "navigation",
+    "responsive"
+  ]);
+
+  return files
+    .filter((file) => {
+      if (!isUsefulSourcePath(file.path) || file.path === path) return false;
+
+      const sameDirectory = pathDirectory(file.path) === directory;
+      const otherStem = fileStem(file.path).toLowerCase();
+      const otherExtension = fileExtension(file.path);
+      const sameStem = sameDirectory && (otherStem === stem || otherStem.startsWith(`${stem}.`));
+      const stylePair =
+        isUiRequest &&
+        sameDirectory &&
+        (STYLE_EXTENSIONS.includes(extension) || STYLE_EXTENSIONS.includes(otherExtension));
+      const commonGlobalStyle = isUiRequest && file.path === "app/globals.css";
+      const testPair =
+        sameDirectory &&
+        (otherStem.includes(`${stem}.test`) || otherStem.includes(`${stem}.spec`) || stem.includes(`${otherStem}.test`) || stem.includes(`${otherStem}.spec`));
+
+      return sameStem || stylePair || commonGlobalStyle || testPair;
+    })
+    .map((file) => file.path);
+}
+
+function expandRelatedPaths(files: ProjectFile[], seedPaths: string[], message: string) {
+  const { importsByPath, importedByPath } = buildImportGraph(files);
+  const related: string[] = [];
+
+  for (const path of seedPaths) {
+    related.push(...(importsByPath.get(path) || []));
+    related.push(...(importedByPath.get(path) || []));
+    related.push(...getSiblingCompanionPaths(files, path, message));
+  }
+
+  return uniqueExistingPaths(files, [related]);
+}
+
+function keywordScore(message: string, file: ProjectFile, terms = getRequestTerms(message)) {
   const lowerMessage = message.toLowerCase();
   const lowerPath = file.path.toLowerCase();
-  const name = lowerPath.split("/").pop() || lowerPath;
-
-  const words = lowerMessage
-    .replace(/[^a-zA-Z0-9_./-]+/g, " ")
-    .split(/\s+/)
-    .filter((word) => word.length >= 3);
+  const name = fileName(lowerPath);
+  const lowerContent = file.content.toLowerCase();
+  const lowerOutline = buildFileOutline(file.content).toLowerCase();
 
   let score = 0;
 
-  for (const word of words) {
-    if (lowerPath.includes(word)) score += 5;
-    if (name.includes(word)) score += 8;
+  for (const term of terms) {
+    if (lowerPath.includes(term)) score += 8;
+    if (name.includes(term)) score += 12;
+    if (lowerOutline.includes(term)) score += 7;
+
+    const contentHits = countTermHits(lowerContent, term);
+    if (contentHits > 0) score += Math.min(18, contentHits * 3);
   }
 
   if (lowerMessage.includes(lowerPath)) score += 50;
   if (lowerMessage.includes(name)) score += 25;
+
+  if (hasAnyTerm(terms, ["button", "form", "input", "modal", "menu", "toolbar", "sidebar", "component", "page"])) {
+    if (/\.(tsx|jsx|css|scss|sass|less)$/i.test(file.path)) score += 6;
+  }
+
+  if (hasAnyTerm(terms, ["api", "route", "server", "provider", "model", "prompt", "agent", "json", "context"])) {
+    if (/^(app\/api|server\/)|\.(ts|js|json)$/i.test(file.path)) score += 6;
+  }
 
   return score;
 }
@@ -163,11 +471,12 @@ function keywordScore(message: string, file: ProjectFile) {
 function getLocalCandidatePaths(files: ProjectFile[], message: string, activePath?: string, selectedFolder?: string) {
   const cleanActivePath = activePath ? cleanPath(activePath) : "";
   const cleanSelectedFolder = selectedFolder ? cleanPath(selectedFolder) : "";
+  const terms = getRequestTerms(message);
 
   const scored = files
-    .filter((file) => !file.path.endsWith("/.keep"))
+    .filter((file) => isUsefulSourcePath(file.path))
     .map((file) => {
-      let score = keywordScore(message, file);
+      let score = keywordScore(message, file, terms);
 
       if (cleanActivePath && file.path === cleanActivePath) score += 100;
       if (cleanSelectedFolder && file.path.startsWith(`${cleanSelectedFolder}/`)) score += 15;
@@ -181,10 +490,44 @@ function getLocalCandidatePaths(files: ProjectFile[], message: string, activePat
     })
     .sort((a, b) => b.score - a.score);
 
-  return scored
+  const seeds = scored
     .filter((item, index) => item.score > 0 || index < 3)
-    .slice(0, MAX_SELECTED_FILES)
+    .slice(0, Math.ceil(MAX_SELECTED_FILES / 2))
     .map((item) => item.path);
+
+  return uniqueExistingPaths(files, [seeds, expandRelatedPaths(files, seeds, message), scored.map((item) => item.path)]);
+}
+
+function buildPickerFileIndex(files: ProjectFile[], message: string, activePath?: string, selectedFolder?: string, localCandidates: string[] = []) {
+  const cleanActivePath = activePath ? cleanPath(activePath) : "";
+  const cleanSelectedFolder = selectedFolder ? cleanPath(selectedFolder) : "";
+  const localCandidateSet = new Set(localCandidates);
+  const terms = getRequestTerms(message);
+
+  return files
+    .filter((file) => isUsefulSourcePath(file.path))
+    .map((file) => {
+      let score = keywordScore(message, file, terms);
+
+      if (cleanActivePath && file.path === cleanActivePath) score += 100;
+      if (cleanSelectedFolder && file.path.startsWith(`${cleanSelectedFolder}/`)) score += 15;
+      if (localCandidateSet.has(file.path)) score += 20;
+
+      const shouldSummarize = score > 0 || localCandidateSet.has(file.path);
+      const outline = shouldSummarize ? truncateMiddle(buildFileOutline(file.content), MAX_PICKER_OUTLINE_CHARS) : "";
+      const imports = shouldSummarize ? getImportSpecifiers(file.content).slice(0, 16) : [];
+
+      return {
+        path: file.path,
+        chars: file.content.length,
+        lines: estimateLines(file.content),
+        relevanceScore: score,
+        imports,
+        outline
+      };
+    })
+    .sort((a, b) => b.relevanceScore - a.relevanceScore || a.path.localeCompare(b.path))
+    .slice(0, MAX_FILE_INDEX_ITEMS);
 }
 
 function getMessageText(body: RequestBody) {
@@ -307,7 +650,15 @@ function contentHasPartialPlaceholder(content: string) {
   ].some((pattern) => pattern.test(content));
 }
 
-function editResponseRepairReason(parsed: any, rawText: string, parseFailed: boolean, files: ProjectFile[], selectedPaths: string[], editIntent: boolean) {
+function editResponseRepairReason(
+  parsed: any,
+  rawText: string,
+  parseFailed: boolean,
+  files: ProjectFile[],
+  selectedPaths: string[],
+  editIntent: boolean,
+  selectedFileStatuses = new Map<string, SelectedFileStatus>()
+) {
   if (!editIntent) return "";
 
   if (parseFailed) {
@@ -335,26 +686,83 @@ function editResponseRepairReason(parsed: any, rawText: string, parseFailed: boo
     return "The user asked for a code change, but the previous response answered in chat instead of returning file edits.";
   }
 
-  const existingFiles = new Map(files.map((file) => [cleanPath(file.path), file]));
+  const existingFiles = new Map(files.filter((file) => isUsefulSourcePath(file.path)).map((file) => [cleanPath(file.path), file]));
+  const selectedPathSet = new Set(selectedPaths.map(cleanPath));
   const changes = Array.isArray(parsed.changes) ? parsed.changes : [];
 
   if (changes.length === 0) {
     return "The previous edit response did not include any file changes.";
   }
 
+  let hasMaterialChange = false;
+
   for (const change of changes) {
-    if ((change.action === "update" || change.action === "create") && contentHasPartialPlaceholder(String(change.content || ""))) {
-      return `The previous ${change.action} for ${change.path} used a placeholder instead of full final file content.`;
+    const changePath = cleanPath(String(change.path || ""));
+    const action = String(change.action || "");
+
+    if (!["create", "update", "delete"].includes(action) || !changePath) {
+      return "The previous edit response included an invalid change action or path.";
     }
 
-    if (change.action === "update") {
-      const existing = existingFiles.get(cleanPath(change.path));
-      const nextContent = String(change.content || "");
+    if ((change.action === "update" || change.action === "create") && contentHasPartialPlaceholder(String(change.content || ""))) {
+      return `The previous ${change.action} for ${changePath} used a placeholder instead of full final file content.`;
+    }
 
-      if (existing && existing.content.length > 1200 && nextContent.length < 120 && nextContent.length < existing.content.length / 8) {
-        return `The previous update for ${change.path} looks like a fragment, not full final file content.`;
+    if (action === "create") {
+      if (existingFiles.has(changePath)) {
+        return `The previous response tried to create ${changePath}, but that file already exists. Use an update with full final content instead.`;
+      }
+
+      if (!String(change.content || "").trim()) {
+        return `The previous response tried to create ${changePath} with empty content.`;
+      }
+
+      hasMaterialChange = true;
+      continue;
+    }
+
+    if (action === "delete") {
+      if (!existingFiles.has(changePath)) {
+        return `The previous response tried to delete ${changePath}, but that file does not exist in the project.`;
+      }
+
+      hasMaterialChange = true;
+      continue;
+    }
+
+    if (action === "update") {
+      const existing = existingFiles.get(changePath);
+      const nextContent = String(change.content || "");
+      const status = selectedFileStatuses.get(changePath);
+
+      if (!existing) {
+        return `The previous response tried to update ${changePath}, but that file does not exist. Use create for new files.`;
+      }
+
+      if (!selectedPathSet.has(changePath)) {
+        return `The previous response tried to update ${changePath}, but that file content was not selected. Only update files whose full content is available.`;
+      }
+
+      if (status?.truncated) {
+        return `The previous response tried to update ${changePath}, but the selected content was truncated. Ask for the missing file context instead of producing a risky full-file replacement.`;
+      }
+
+      if (!nextContent.trim()) {
+        return `The previous update for ${changePath} returned empty content.`;
+      }
+
+      if (existing.content.length > 1200 && nextContent.length < 120 && nextContent.length < existing.content.length / 8) {
+        return `The previous update for ${changePath} looks like a fragment, not full final file content.`;
+      }
+
+      if (nextContent !== existing.content) {
+        hasMaterialChange = true;
       }
     }
+  }
+
+  if (!hasMaterialChange) {
+    return "The previous edit response did not make any material file changes.";
   }
 
   return "";
@@ -387,6 +795,8 @@ EDIT DISCIPLINE:
 - When editing a repeated group such as a menu, toolbar, list of buttons, form controls, tabs, cards, or navigation items, inspect the whole group and keep behavior consistent across siblings.
 - When changing shared logic, scan the selected file context for every caller or dependent state path included in the prompt and update all affected parts together.
 - If a file is truncated and the missing section is necessary to make a safe full-file update, return an answer requesting the needed file or context instead of producing a risky edit.
+- Update only files whose content appears in SELECTED FILE CONTENT with CONTENT_STATUS: FULL. You may create new files when the path is clearly required.
+- Do not return an edit unless at least one file actually changes.
 - Prefer the smallest complete change that satisfies the request while leaving unrelated code intact.
 
 FULL-FILE OUTPUT RULES:
@@ -452,14 +862,7 @@ async function pickRelevantFiles(
   const localCandidatePaths = getLocalCandidatePaths(files, message, activePath, selectedFolder);
   const localCandidates = uniqueExistingPaths(files, [explicitPaths, localCandidatePaths]);
 
-  const fileIndex = files
-    .filter((file) => !file.path.endsWith("/.keep"))
-    .slice(0, MAX_FILE_INDEX_ITEMS)
-    .map((file) => ({
-      path: file.path,
-      chars: file.content.length,
-      lines: estimateLines(file.content)
-    }));
+  const fileIndex = buildPickerFileIndex(files, message, activePath, selectedFolder, localCandidates);
 
   const pickerInput = `
 USER REQUEST:
@@ -504,11 +907,14 @@ Rules:
 - Include files explicitly named by the user.
 - Include sibling component, style, utility, and config files when the requested change can affect a shared workflow or repeated UI pattern.
 - For UI changes involving menus, toolbars, buttons, forms, navigation, state, or handlers, include the file that defines the surrounding component and any shared styling file if present.
+- If a likely implementation file imports local helpers/styles, include those related files when the change may affect behavior or rendering.
 - Include related config files only if needed.
 - Do not invent paths.
 `,
     input: pickerInput,
-    signal
+    signal,
+    jsonSchema: FILE_PICKER_JSON_SCHEMA,
+    jsonSchemaName: "file_picker_response"
   });
 
   try {
@@ -521,12 +927,13 @@ Rules:
       .slice(0, MAX_SELECTED_FILES);
 
     if (picked.length > 0) {
-      return uniqueExistingPaths(files, [explicitPaths, picked, localCandidatePaths]);
+      const related = expandRelatedPaths(files, [...explicitPaths, ...picked], message);
+      return uniqueExistingPaths(files, [explicitPaths, picked, related, localCandidatePaths]);
     }
   } catch {
   }
 
-  return localCandidates;
+  return uniqueExistingPaths(files, [explicitPaths, localCandidates, expandRelatedPaths(files, localCandidates, message)]);
 }
 
 function buildSelectedFileContext(files: ProjectFile[], selectedPaths: string[], activePath?: string) {
@@ -534,6 +941,7 @@ function buildSelectedFileContext(files: ProjectFile[], selectedPaths: string[],
   const cleanActivePath = activePath ? cleanPath(activePath) : "";
   let total = 0;
   const chunks: string[] = [];
+  const statuses = new Map<string, SelectedFileStatus>();
 
   for (const path of selectedPaths) {
     const file = map.get(path);
@@ -548,6 +956,11 @@ function buildSelectedFileContext(files: ProjectFile[], selectedPaths: string[],
     const content = truncateMiddle(file.content, maxForThisFile);
     total += content.length;
     const outline = buildFileOutline(file.content);
+    statuses.set(file.path, {
+      truncated: isTruncated,
+      originalChars: file.content.length,
+      includedChars: content.length
+    });
 
     chunks.push(`FILE: ${file.path}
 CONTENT_STATUS: ${isTruncated ? "TRUNCATED" : "FULL"}
@@ -562,7 +975,10 @@ ${content}
 \`\`\``);
   }
 
-  return chunks.join("\n\n");
+  return {
+    text: chunks.join("\n\n"),
+    statuses
+  };
 }
 
 export async function POST(req: NextRequest) {
@@ -648,7 +1064,7 @@ PROJECT TREE ONLY:
 ${projectTree}
 
 SELECTED FILE CONTENT:
-${selectedFileContext || "No selected file contents. This may be a create-only or answer-only request."}
+${selectedFileContext.text || "No selected file contents. This may be a create-only or answer-only request."}
 `;
 
     const finalInputTokens = estimateTokens(finalInput);
@@ -677,44 +1093,30 @@ ${selectedFileContext || "No selected file contents. This may be a create-only o
       }
     }
 
-    let response = await callAi({
-      provider: requested.provider,
-      model: requested.model,
-      instructions: buildCodingInstructions(),
-      input: finalInput,
-      signal: req.signal,
-      allowLargeInput
-    });
-
-    let parsed;
-    let parseFailed = false;
-
-    try {
-      parsed = normalizeAiEditResponse(parseAiJson(response.text));
-    } catch {
-      parseFailed = true;
-      parsed = {
-        type: "answer",
-        message: response.text
-      };
-    }
-
     const editIntent = isLikelyEditRequest(latestUserMessage, mode);
-    const repairReason = editResponseRepairReason(parsed, response.text, parseFailed, files, selectedPaths, editIntent);
+    let response;
+    let parsed: any = {
+      type: "answer",
+      message: "The AI did not produce a response."
+    };
+    let repairReason = "";
+    let previousInvalidResponse = "";
+    let lastRepairReason = "";
 
-    if (repairReason) {
-      const previousResponse = truncateMiddle(response.text, MAX_REPAIR_RESPONSE_CHARS);
-      const repairInputWithResponse = `${finalInput}
+    for (let attempt = 0; attempt < MAX_EDIT_ATTEMPTS; attempt += 1) {
+      const repairInputWithResponse = repairReason
+        ? `${finalInput}
 
 PREVIOUS RESPONSE PROBLEM:
 ${repairReason}
 
 PREVIOUS INVALID RESPONSE:
 \`\`\`
-${previousResponse}
+${truncateMiddle(previousInvalidResponse, MAX_REPAIR_RESPONSE_CHARS)}
 \`\`\`
-`;
-      const repairInput =
+`
+        : finalInput;
+      const attemptInput =
         allowLargeInput || repairInputWithResponse.length <= maxInputChars
           ? repairInputWithResponse
           : finalInput;
@@ -723,12 +1125,14 @@ ${previousResponse}
         provider: requested.provider,
         model: requested.model,
         instructions: buildCodingInstructions(repairReason),
-        input: repairInput,
+        input: attemptInput,
         signal: req.signal,
-        allowLargeInput
+        allowLargeInput,
+        jsonSchema: AI_EDIT_JSON_SCHEMA,
+        jsonSchemaName: "coding_agent_response"
       });
 
-      parseFailed = false;
+      let parseFailed = false;
 
       try {
         parsed = normalizeAiEditResponse(parseAiJson(response.text));
@@ -740,22 +1144,39 @@ ${previousResponse}
         };
       }
 
-      const secondRepairReason = editResponseRepairReason(parsed, response.text, parseFailed, files, selectedPaths, editIntent);
+      const nextRepairReason = editResponseRepairReason(
+        parsed,
+        response.text,
+        parseFailed,
+        files,
+        selectedPaths,
+        editIntent,
+        selectedFileContext.statuses
+      );
 
-      if (secondRepairReason) {
-        parsed = {
-          type: "answer",
-          message: `The AI did not produce safe file edits: ${secondRepairReason}`
-        };
+      if (!nextRepairReason) {
+        repairReason = "";
+        break;
       }
+
+      repairReason = nextRepairReason;
+      lastRepairReason = nextRepairReason;
+      previousInvalidResponse = response.text;
+    }
+
+    if (repairReason) {
+      parsed = {
+        type: "answer",
+        message: `The AI did not produce safe file edits after ${MAX_EDIT_ATTEMPTS} attempts: ${lastRepairReason}`
+      };
     }
 
     return NextResponse.json({
       ...parsed,
-      provider: response.provider,
-      model: response.model,
-      text: response.text,
-      raw: safeRaw(response.raw),
+      provider: response?.provider || requested.provider,
+      model: response?.model || requested.model,
+      text: response?.text || "",
+      raw: safeRaw(response?.raw),
       usedFiles: selectedPaths,
       estimatedTokens: finalInputTokens,
       maxInputChars

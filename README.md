@@ -19,6 +19,7 @@ npm install
 OPENAI_API_KEY=your_key
 GROQ_API_KEY=your_groq_key
 APP_PASSWORD=your_password
+MAX_INPUT_CHARS=220000
 ```
 
 6. Run:
@@ -43,6 +44,7 @@ Add these environment variables in Vercel:
 OPENAI_API_KEY=your_key
 GROQ_API_KEY=your_groq_key
 APP_PASSWORD=your_password
+MAX_INPUT_CHARS=220000
 ```
 
 Then deploy.

@@ -36,8 +36,8 @@ export function getDefaultModel(provider) {
 }
 
 export function getMaxInputChars() {
-  const parsed = Number(process.env.MAX_INPUT_CHARS || "120000");
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 120000;
+  const parsed = Number(process.env.MAX_INPUT_CHARS || "220000");
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 220000;
 }
 
 export function assertInputWithinLimit(input, label = "input") {
@@ -117,7 +117,7 @@ export function validateProviderModel(provider, model) {
   }
 }
 
-export async function callAi({ provider, model, instructions, input, signal, allowLargeInput = false }) {
+export async function callAi({ provider, model, instructions, input, signal, allowLargeInput = false, jsonSchema, jsonSchemaName }) {
   validateProviderModel(provider, model);
 
   if (!allowLargeInput) {
@@ -125,15 +125,15 @@ export async function callAi({ provider, model, instructions, input, signal, all
   }
 
   if (provider === OPENAI_PROVIDER) {
-    return callOpenAI({ model, instructions, input, signal });
+    return callOpenAI({ model, instructions, input, signal, jsonSchema, jsonSchemaName });
   }
 
   if (provider === GEMINI_PROVIDER) {
-    return callGemini({ model, instructions, input, signal });
+    return callGemini({ model, instructions, input, signal, jsonSchema, jsonSchemaName });
   }
 
   if (provider === GROQ_PROVIDER) {
-    return callGroq({ model, instructions, input, signal });
+    return callGroq({ model, instructions, input, signal, jsonSchema, jsonSchemaName });
   }
 
   const error = new Error(`Invalid provider "${provider}".`);

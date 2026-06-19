@@ -29,21 +29,101 @@ function isAbortError(error) {
   return error?.name === "AbortError" || error?.name === "APIUserAbortError";
 }
 
-export async function callOpenAI({ model, instructions, input, signal }) {
+function supportsReasoning(model) {
+  return model.startsWith("gpt-5") || model.startsWith("o3");
+}
+
+function getMaxOutputTokens() {
+  const parsed = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || "32768");
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 32768;
+}
+
+function isResponseFormatError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /json_schema|json_object|response_format|text\.format|schema|format/i.test(message);
+}
+
+function isReasoningError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /reasoning|effort/i.test(message);
+}
+
+function buildTextConfig(jsonSchema, jsonSchemaName, fallbackJsonObject = false) {
+  if (jsonSchema) {
+    return {
+      format: {
+        type: "json_schema",
+        name: jsonSchemaName || "json_response",
+        schema: jsonSchema,
+        strict: false
+      },
+      verbosity: "low"
+    };
+  }
+
+  if (fallbackJsonObject) {
+    return {
+      format: { type: "json_object" },
+      verbosity: "low"
+    };
+  }
+
+  return {
+    verbosity: "low"
+  };
+}
+
+export async function callOpenAI({ model, instructions, input, signal, jsonSchema, jsonSchemaName }) {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
     throw new Error("Missing OPENAI_API_KEY.");
   }
 
-  const client = new OpenAI({ apiKey });
+  const client = new OpenAI({ apiKey, timeout: 900000 });
 
-  try {
-    const response = await client.responses.create({
+  async function createResponse(textConfig, useReasoning) {
+    const request = {
       model,
       instructions,
-      input
-    }, { signal });
+      input,
+      max_output_tokens: getMaxOutputTokens(),
+      text: textConfig
+    };
+
+    if (useReasoning) {
+      request.reasoning = { effort: "high" };
+    }
+
+    return client.responses.create(request, { signal });
+  }
+
+  async function createResponseWithReasoningFallback(textConfig) {
+    const useReasoning = supportsReasoning(model);
+
+    try {
+      return await createResponse(textConfig, useReasoning);
+    } catch (error) {
+      if (!useReasoning || !isReasoningError(error)) throw error;
+      return createResponse(textConfig, false);
+    }
+  }
+
+  try {
+    let response;
+
+    try {
+      response = await createResponseWithReasoningFallback(buildTextConfig(jsonSchema, jsonSchemaName));
+    } catch (error) {
+      if (!jsonSchema || !isResponseFormatError(error)) throw error;
+
+      try {
+        response = await createResponseWithReasoningFallback(buildTextConfig(undefined, undefined, true));
+      } catch (fallbackError) {
+        if (!isResponseFormatError(fallbackError)) throw fallbackError;
+        response = await createResponseWithReasoningFallback(buildTextConfig(undefined, undefined, false));
+      }
+    }
 
     return {
       provider: OPENAI_PROVIDER,
